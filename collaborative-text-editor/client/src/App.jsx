@@ -3,7 +3,7 @@ import { MessageSquare, History, Users, Save, Download } from 'lucide-react';
 import './App.css';
 
 function App() {
-  // State management
+  // state management
   const [document, setDocument] = useState('');
   const [documentTitle, setDocumentTitle] = useState('Untitled Document');
   const [users, setUsers] = useState([]);
@@ -15,11 +15,11 @@ function App() {
   const [showHistory, setShowHistory] = useState(false);
   const [currentUser, setCurrentUser] = useState(null);
   
-  // Refs for WebSocket and text editor
+  // refs for WebSocket and text editor
   const ws = useRef(null);
   const textareaRef = useRef(null);
 
-  // Initialize connection when username is set
+  // initialize connection when username is set
   useEffect(() => {
     if (currentUser) {
       connectToServer();
@@ -32,14 +32,14 @@ function App() {
     };
   }, [currentUser]);
 
-  // Connect to WebSocket server
+  // connect to WebSocket server
   const connectToServer = () => {
-    // For now, we'll simulate the connection
-    // Later you'll replace this with: ws.current = new WebSocket('ws://localhost:5000');
+    // for now, we'll simulate the connection
+    // later you'll replace this with: ws.current = new WebSocket('ws://localhost:5000');
     
     setIsConnected(true);
     
-    // Simulate receiving initial data
+    // simulate receiving initial data
     setTimeout(() => {
       setUsers([
         { id: 1, name: currentUser, color: '#3b82f6' },
@@ -48,7 +48,7 @@ function App() {
     }, 500);
   };
 
-  // Handle document changes
+  // handle document changes
   const handleDocumentChange = (e) => {
     const newContent = e.target.value;
     setDocument(newContent);
@@ -61,7 +61,7 @@ function App() {
     // }));
   };
 
-  // Text formatting functions
+  // text formatting functions
   const formatText = (command) => {
     const textarea = textareaRef.current;
     const start = textarea.selectionStart;
@@ -87,7 +87,7 @@ function App() {
     setDocument(newDocument);
   };
 
-  // Send chat message
+  // send chat message
   const sendMessage = () => {
     if (newMessage.trim()) {
       const message = {
@@ -108,13 +108,13 @@ function App() {
     }
   };
 
-  // Save document
+  // save document
   const saveDocument = () => {
     console.log('Saving document:', { title: documentTitle, content: document });
     alert('Document saved! (In real app, this would save to MongoDB)');
   };
 
-  // Download document
+  // download document
   const downloadDocument = () => {
     const element = document.createElement('a');
     const file = new Blob([document], {type: 'text/plain'});
@@ -125,7 +125,7 @@ function App() {
     document.body.removeChild(element);
   };
 
-  // Login screen
+  // login screen
   if (!currentUser) {
     return (
       <div className="login-container">
@@ -164,7 +164,7 @@ function App() {
     );
   }
 
-  // Main editor interface
+  // main editor interface
   return (
     <div className="app-container">
       {/* Header */}
