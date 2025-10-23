@@ -14,10 +14,12 @@ function App() {
   const [showChat, setShowChat] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [currentUser, setCurrentUser] = useState(null);
+  const [saveStatus, setSaveStatus] = useState('');
   
   // refs for WebSocket and text editor
   const ws = useRef(null);
   const textareaRef = useRef(null);
+  const reconnectTimeout = useRef(null);
 
   // initialize connection when username is set
   useEffect(() => {
@@ -29,23 +31,107 @@ function App() {
       if (ws.current) {
         ws.current.close();
       }
+      if (reconnectTimeout.current) {
+        clearTimeout(reconnectTimeout.current);
+      }
     };
   }, [currentUser]);
 
   // connect to WebSocket server
   const connectToServer = () => {
-    // for now, we'll simulate the connection
-    // later you'll replace this with: ws.current = new WebSocket('ws://localhost:5000');
-    
-    setIsConnected(true);
-    
-    // simulate receiving initial data
-    setTimeout(() => {
-      setUsers([
-        { id: 1, name: currentUser, color: '#3b82f6' },
-        { id: 2, name: 'User2', color: '#10b981' }
-      ]);
-    }, 500);
+    try {
+      // connect to backend WebSocket server
+      ws.current = new WebSocket('ws://localhost:5000');
+      
+      ws.current.onopen = () => {
+        console.log('✅ Connected to server');
+        setIsConnected(true);
+        
+        // send user join message
+        ws.current.send(JSON.stringify({
+          type: 'user_join',
+          username: currentUser
+        }));
+      };
+      
+      ws.current.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data);
+          handleServerMessage(message);
+        } catch (error) {
+          console.error('Error parsing message:', error);
+        }
+      };
+      
+      ws.current.onerror = (error) => {
+        console.error('WebSocket error:', error);
+        setIsConnected(false);
+      };
+      
+      ws.current.onclose = () => {
+        console.log('❌ Disconnected from server');
+        setIsConnected(false);
+        
+        // attempt to reconnect after 3 seconds
+        reconnectTimeout.current = setTimeout(() => {
+          console.log('🔄 Attempting to reconnect...');
+          connectToServer();
+        }, 3000);
+      };
+      
+    } catch (error) {
+      console.error('Failed to connect:', error);
+      setIsConnected(false);
+    }
+  };
+
+  // handle messages from server
+  const handleServerMessage = (message) => {
+    switch(message.type) {
+      case 'init':
+        // initial state from server
+        if (message.data.document) {
+          setDocument(message.data.document.content || '');
+          setDocumentTitle(message.data.document.title || 'Untitled Document');
+        }
+        if (message.data.users) {
+          setUsers(message.data.users);
+        }
+        break;
+        
+      case 'document_update':
+        // another user updated the document
+        setDocument(message.data.content);
+        break;
+        
+      case 'title_update':
+        // another user updated the title
+        setDocumentTitle(message.data.title);
+        break;
+        
+      case 'user_list_update':
+        // user list changed
+        setUsers(message.data.users);
+        break;
+        
+      case 'chat_message':
+        // new chat message
+        setMessages(prev => [...prev, message.data.message]);
+        break;
+        
+      case 'save_success':
+        setSaveStatus('✅ Saved successfully!');
+        setTimeout(() => setSaveStatus(''), 3000);
+        break;
+        
+      case 'save_error':
+        setSaveStatus('❌ Save failed');
+        setTimeout(() => setSaveStatus(''), 3000);
+        break;
+        
+      default:
+        console.log('Unknown message type:', message.type);
+    }
   };
 
   // handle document changes
@@ -53,12 +139,27 @@ function App() {
     const newContent = e.target.value;
     setDocument(newContent);
     
-    // In real implementation, send changes via WebSocket
-    // ws.current.send(JSON.stringify({
-    //   type: 'document_change',
-    //   content: newContent,
-    //   user: currentUser
-    // }));
+    // send changes to server
+    if (ws.current && ws.current.readyState === WebSocket.OPEN) {
+      ws.current.send(JSON.stringify({
+        type: 'document_change',
+        content: newContent
+      }));
+    }
+  };
+
+  // handle title change
+  const handleTitleChange = (e) => {
+    const newTitle = e.target.value;
+    setDocumentTitle(newTitle);
+    
+    // send title change to server
+    if (ws.current && ws.current.readyState === WebSocket.OPEN) {
+      ws.current.send(JSON.stringify({
+        type: 'title_change',
+        title: newTitle
+      }));
+    }
   };
 
   // text formatting functions
@@ -67,6 +168,11 @@ function App() {
     const start = textarea.selectionStart;
     const end = textarea.selectionEnd;
     const selectedText = document.substring(start, end);
+    
+    if (!selectedText) {
+      alert('Please select text to format');
+      return;
+    }
     
     let formattedText = selectedText;
     switch(command) {
@@ -85,11 +191,25 @@ function App() {
     
     const newDocument = document.substring(0, start) + formattedText + document.substring(end);
     setDocument(newDocument);
+    
+    // send to server
+    if (ws.current && ws.current.readyState === WebSocket.OPEN) {
+      ws.current.send(JSON.stringify({
+        type: 'document_change',
+        content: newDocument
+      }));
+    }
+    
+    // restore cursor position
+    setTimeout(() => {
+      textarea.focus();
+      textarea.setSelectionRange(start, start + formattedText.length);
+    }, 0);
   };
 
   // send chat message
   const sendMessage = () => {
-    if (newMessage.trim()) {
+    if (newMessage.trim() && ws.current && ws.current.readyState === WebSocket.OPEN) {
       const message = {
         id: Date.now(),
         user: currentUser,
@@ -97,21 +217,25 @@ function App() {
         timestamp: new Date().toLocaleTimeString()
       };
       
-      setMessages([...messages, message]);
-      setNewMessage('');
+      ws.current.send(JSON.stringify({
+        type: 'chat_message',
+        message: message
+      }));
       
-      // In real implementation:
-      // ws.current.send(JSON.stringify({
-      //   type: 'chat_message',
-      //   message: message
-      // }));
+      setNewMessage('');
     }
   };
 
-  // save document
+  // save document to MongoDB
   const saveDocument = () => {
-    console.log('Saving document:', { title: documentTitle, content: document });
-    alert('Document saved! (In real app, this would save to MongoDB)');
+    if (ws.current && ws.current.readyState === WebSocket.OPEN) {
+      setSaveStatus('💾 Saving...');
+      ws.current.send(JSON.stringify({
+        type: 'save_document'
+      }));
+    } else {
+      alert('Not connected to server. Please wait for reconnection.');
+    }
   };
 
   // download document
@@ -175,7 +299,7 @@ function App() {
             <input
               type="text"
               value={documentTitle}
-              onChange={(e) => setDocumentTitle(e.target.value)}
+              onChange={handleTitleChange}
               className="document-title-input"
             />
           </div>
@@ -195,8 +319,15 @@ function App() {
               <span className="users-count">{users.length}</span>
             </div>
             
+            {/* Save status */}
+            {saveStatus && (
+              <span className="status-text" style={{ color: saveStatus.includes('✅') ? '#10b981' : '#ef4444' }}>
+                {saveStatus}
+              </span>
+            )}
+            
             {/* Action buttons */}
-            <button onClick={saveDocument} className="btn-save">
+            <button onClick={saveDocument} className="btn-save" disabled={!isConnected}>
               <Save className="icon" size={16} />
               <span>Save</span>
             </button>
@@ -247,6 +378,7 @@ function App() {
               onChange={handleDocumentChange}
               className="editor-textarea"
               placeholder="Start typing your document..."
+              disabled={!isConnected}
             />
           </div>
         </div>
@@ -254,18 +386,24 @@ function App() {
         {/* Chat sidebar */}
         {showChat && (
           <div className="chat-sidebar">
-            <div className="chat-header">Chat</div>
+            <div className="chat-header">Chat ({messages.length})</div>
             
             <div className="chat-messages">
-              {messages.map((msg) => (
-                <div key={msg.id} className="chat-message">
-                  <div className="message-header">
-                    <span className="message-user">{msg.user}</span>
-                    <span className="message-time">{msg.timestamp}</span>
-                  </div>
-                  <p className="message-text">{msg.text}</p>
+              {messages.length === 0 ? (
+                <div style={{ textAlign: 'center', color: '#64748b', padding: '20px' }}>
+                  No messages yet. Start the conversation!
                 </div>
-              ))}
+              ) : (
+                messages.map((msg) => (
+                  <div key={msg.id} className="chat-message">
+                    <div className="message-header">
+                      <span className="message-user">{msg.user}</span>
+                      <span className="message-time">{msg.timestamp}</span>
+                    </div>
+                    <p className="message-text">{msg.text}</p>
+                  </div>
+                ))
+              )}
             </div>
             
             <div className="chat-input-container">
@@ -277,8 +415,13 @@ function App() {
                   onKeyPress={(e) => e.key === 'Enter' && sendMessage()}
                   placeholder="Type a message..."
                   className="chat-input"
+                  disabled={!isConnected}
                 />
-                <button onClick={sendMessage} className="chat-send-btn">
+                <button 
+                  onClick={sendMessage} 
+                  className="chat-send-btn"
+                  disabled={!isConnected || !newMessage.trim()}
+                >
                   Send
                 </button>
               </div>
@@ -292,12 +435,16 @@ function App() {
         <div className="footer-content">
           <span className="footer-label">Active users:</span>
           <div className="active-users">
-            {users.map((user) => (
-              <div key={user.id} className="user-badge">
-                <div className="user-color-dot" style={{ backgroundColor: user.color }}></div>
-                <span className="user-name">{user.name}</span>
-              </div>
-            ))}
+            {users.length === 0 ? (
+              <span className="footer-label">No users yet</span>
+            ) : (
+              users.map((user) => (
+                <div key={user.id} className="user-badge">
+                  <div className="user-color-dot" style={{ backgroundColor: user.color }}></div>
+                  <span className="user-name">{user.name}</span>
+                </div>
+              ))
+            )}
           </div>
         </div>
       </div>
