@@ -341,6 +341,7 @@ app.get('/api/documents', async (req, res) => {
     const documents = await Document.find().sort({ updatedAt: -1 }).limit(10);
     res.json(documents);
   } catch (error) {
+    console.error('Error fetching documents:', error);
     res.status(500).json({ error: 'Failed to fetch documents' });
   }
 });

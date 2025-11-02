@@ -32,19 +32,6 @@ function App() {
     }
   }, [currentUser, screen]);
 
-  // Debug: Log when document content or title changes
-  useEffect(() => {
-    console.log('📝 Document content changed:', documentContent?.substring(0, 50));
-  }, [documentContent]);
-
-  useEffect(() => {
-    console.log('📋 Document title changed:', documentTitle);
-  }, [documentTitle]);
-
-  useEffect(() => {
-    console.log('🆔 Document ID changed:', documentId);
-  }, [documentId]);
-
   // Initialize connection when entering editor
   useEffect(() => {
     if (currentUser && screen === 'editor') {
@@ -78,7 +65,6 @@ function App() {
     try {
       const response = await fetch('http://localhost:5000/api/documents');
       const data = await response.json();
-      console.log('📄 Fetched documents:', data);
       setDocuments(data);
     } catch (error) {
       console.error('Error fetching documents:', error);
@@ -90,31 +76,47 @@ function App() {
 
   // Create new document
   const createNewDocument = () => {
-    console.log('Creating new document');
+    console.log('📝 Creating new document');
     setDocumentContent('');
     setDocumentTitle('Untitled Document');
     setDocumentId(null);
-    setMessages([]); // Clear chat messages
+    setMessages([]);
     setScreen('editor');
   };
 
   // Open existing document
-  const openDocument = (doc) => {
-    console.log('📂 Opening document:', doc);
-    console.log('Document content:', doc.content);
-    console.log('Document title:', doc.title);
-    console.log('Document ID:', doc._id);
+  const openDocument = async (doc) => {
+    if (!doc || !doc._id) {
+      console.error('❌ Invalid document');
+      return;
+    }
     
-    // Set all document state FIRST before switching to editor
-    setDocumentContent(doc.content || '');
-    setDocumentTitle(doc.title || 'Untitled Document');
-    setDocumentId(doc._id);
-    setMessages([]); // Clear chat messages
+    console.log('📂 Opening document:', doc.title);
     
-    console.log('✅ Document state set with ID:', doc._id);
-    
-    // Switch to editor - the useEffect will handle WebSocket connection
-    setScreen('editor');
+    // Fetch the latest version from server to ensure we have current data
+    try {
+      const response = await fetch(`http://localhost:5000/api/documents/${doc._id}`);
+      const fullDoc = await response.json();
+      
+      console.log('✅ Fetched full document:', {
+        title: fullDoc.title,
+        contentLength: fullDoc.content?.length || 0,
+        id: fullDoc._id
+      });
+      
+      // Set all state from the fetched document
+      setDocumentContent(fullDoc.content || '');
+      setDocumentTitle(fullDoc.title || 'Untitled Document');
+      setDocumentId(fullDoc._id);
+      setMessages([]);
+      
+      // Switch to editor after state is set
+      setScreen('editor');
+      
+    } catch (error) {
+      console.error('❌ Error fetching document:', error);
+      alert('Failed to open document');
+    }
   };
 
   // Delete document
@@ -151,10 +153,7 @@ function App() {
       ws.current.close();
     }
     setIsConnected(false);
-    setDocumentContent(''); // Clear document content
-    setDocumentTitle('Untitled Document'); // Reset title
-    setDocumentId(null); // Clear document ID
-    setMessages([]); // Clear messages
+    setMessages([]);
     setScreen('documents');
     fetchDocuments();
   };
@@ -495,10 +494,7 @@ function App() {
                       <Trash2 size={20} />
                     </button>
                   </div>
-                  <div className="document-card-body" onClick={() => {
-                    console.log('Card clicked, document:', doc);
-                    openDocument(doc);
-                  }}>
+                  <div className="document-card-body" onClick={() => openDocument(doc)}>
                     <h3 className="document-card-title">{doc.title}</h3>
                     <p className="document-card-preview">
                       {doc.content ? doc.content.substring(0, 100) + (doc.content.length > 100 ? '...' : '') : 'Empty document'}
