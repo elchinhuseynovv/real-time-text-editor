@@ -1,5 +1,9 @@
 const request = require('supertest');
 const mongoose = require('mongoose');
+
+// Set NODE_ENV to test to prevent server from starting
+process.env.NODE_ENV = 'test';
+
 const app = require('../../server');
 const Document = require('../../models/Document');
 
@@ -271,6 +275,228 @@ describe('Document API Routes', () => {
       const updated = await Document.findById(doc._id);
       const permission = updated.permissions.find(p => p.username === 'editor1');
       expect(permission).toBeUndefined();
+    });
+
+    test('should require username in body', async () => {
+      const doc = await Document.create({
+        title: 'Test',
+        owner: testUser
+      });
+
+      const response = await request(app)
+        .delete(`/api/documents/${doc._id}/permissions`)
+        .set('x-username', testUser)
+        .send({});
+
+      expect(response.status).toBe(400);
+    });
+  });
+
+  describe('POST /api/documents/:id/share', () => {
+    test('should generate share link with edit access', async () => {
+      const doc = await Document.create({
+        title: 'Test Doc',
+        owner: testUser
+      });
+
+      const response = await request(app)
+        .post(`/api/documents/${doc._id}/share`)
+        .set('x-username', testUser)
+        .send({ access: 'edit' });
+
+      expect(response.status).toBe(200);
+      expect(response.body.token).toBeDefined();
+      expect(response.body.shareUrl).toBeDefined();
+      expect(response.body.access).toBe('edit');
+
+      const updated = await Document.findById(doc._id);
+      expect(updated.shareToken).toBe(response.body.token);
+      expect(updated.shareAccess).toBe('edit');
+    });
+
+    test('should generate share link with read access', async () => {
+      const doc = await Document.create({
+        title: 'Test Doc',
+        owner: testUser
+      });
+
+      const response = await request(app)
+        .post(`/api/documents/${doc._id}/share`)
+        .set('x-username', testUser)
+        .send({ access: 'read' });
+
+      expect(response.status).toBe(200);
+      expect(response.body.access).toBe('read');
+    });
+
+    test('should require owner to generate share link', async () => {
+      const doc = await Document.create({
+        title: 'Test Doc',
+        owner: 'owner1'
+      });
+
+      const response = await request(app)
+        .post(`/api/documents/${doc._id}/share`)
+        .set('x-username', 'notowner')
+        .send({ access: 'edit' });
+
+      expect(response.status).toBe(403);
+    });
+
+    test('should require valid access level', async () => {
+      const doc = await Document.create({
+        title: 'Test Doc',
+        owner: testUser
+      });
+
+      const response = await request(app)
+        .post(`/api/documents/${doc._id}/share`)
+        .set('x-username', testUser)
+        .send({ access: 'invalid' });
+
+      expect(response.status).toBe(400);
+    });
+
+    test('should return 404 for non-existent document', async () => {
+      const fakeId = new mongoose.Types.ObjectId();
+      const response = await request(app)
+        .post(`/api/documents/${fakeId}/share`)
+        .set('x-username', testUser)
+        .send({ access: 'edit' });
+
+      expect(response.status).toBe(404);
+    });
+  });
+
+  describe('GET /api/documents/share/:token', () => {
+    test('should join document with edit access', async () => {
+      const doc = await Document.create({
+        title: 'Shared Doc',
+        owner: 'owner1',
+        shareToken: 'test-token-123',
+        shareAccess: 'edit'
+      });
+
+      const response = await request(app)
+        .get('/api/documents/share/test-token-123')
+        .set('x-username', 'newuser');
+
+      expect(response.status).toBe(200);
+      expect(response.body.documentId).toBe(doc._id.toString());
+      expect(response.body.access).toBe('edit');
+
+      const updated = await Document.findById(doc._id);
+      const permission = updated.permissions.find(p => p.username === 'newuser');
+      expect(permission).toBeDefined();
+      expect(permission.role).toBe('editor');
+    });
+
+    test('should join document with read access', async () => {
+      const doc = await Document.create({
+        title: 'Shared Doc',
+        owner: 'owner1',
+        shareToken: 'test-token-read',
+        shareAccess: 'read'
+      });
+
+      const response = await request(app)
+        .get('/api/documents/share/test-token-read')
+        .set('x-username', 'newuser');
+
+      expect(response.status).toBe(200);
+      expect(response.body.access).toBe('read');
+
+      const updated = await Document.findById(doc._id);
+      const permission = updated.permissions.find(p => p.username === 'newuser');
+      expect(permission).toBeDefined();
+      expect(permission.role).toBe('viewer');
+    });
+
+    test('should require username', async () => {
+      const response = await request(app)
+        .get('/api/documents/share/test-token-123');
+
+      expect(response.status).toBe(400);
+    });
+
+    test('should return 404 for invalid token', async () => {
+      const response = await request(app)
+        .get('/api/documents/share/invalid-token')
+        .set('x-username', 'newuser');
+
+      expect(response.status).toBe(404);
+    });
+  });
+
+  describe('DELETE /api/documents/:id/share', () => {
+    test('should revoke share link', async () => {
+      const doc = await Document.create({
+        title: 'Test Doc',
+        owner: testUser,
+        shareToken: 'test-token',
+        shareAccess: 'edit'
+      });
+
+      const response = await request(app)
+        .delete(`/api/documents/${doc._id}/share`)
+        .set('x-username', testUser);
+
+      expect(response.status).toBe(200);
+
+      const updated = await Document.findById(doc._id);
+      expect(updated.shareToken).toBeNull();
+      expect(updated.shareAccess).toBeNull();
+    });
+
+    test('should require owner to revoke share link', async () => {
+      const doc = await Document.create({
+        title: 'Test Doc',
+        owner: 'owner1',
+        shareToken: 'test-token',
+        shareAccess: 'edit'
+      });
+
+      const response = await request(app)
+        .delete(`/api/documents/${doc._id}/share`)
+        .set('x-username', 'notowner');
+
+      expect(response.status).toBe(403);
+    });
+
+    test('should return 404 for non-existent document', async () => {
+      const fakeId = new mongoose.Types.ObjectId();
+      const response = await request(app)
+        .delete(`/api/documents/${fakeId}/share`)
+        .set('x-username', testUser);
+
+      expect(response.status).toBe(404);
+    });
+  });
+
+  describe('Error handling', () => {
+    test('should handle server errors gracefully', async () => {
+      const response = await request(app)
+        .get('/api/documents/invalid-id-format')
+        .set('x-username', testUser);
+
+      // Should handle invalid ID format
+      expect([400, 404, 500]).toContain(response.status);
+    });
+
+    test('should handle missing username in POST permissions', async () => {
+      const doc = await Document.create({
+        title: 'Test',
+        owner: testUser
+      });
+
+      const response = await request(app)
+        .post(`/api/documents/${doc._id}/permissions`)
+        .set('x-username', testUser)
+        .send({
+          role: 'editor'
+        });
+
+      expect(response.status).toBe(400);
     });
   });
 });

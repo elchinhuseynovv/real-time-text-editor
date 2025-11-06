@@ -39,15 +39,16 @@ class DocumentController {
       const { id } = req.params;
       const username = req.user?.username || req.headers['x-username'] || 'anonymous';
 
-      // Check read permission
-      const hasPermission = await permissionService.checkPermission(id, username, 'read');
-      if (!hasPermission) {
-        return res.status(403).json({ error: 'Insufficient permissions' });
-      }
-
+      // First check if document exists
       const document = await documentService.getDocumentById(id);
       if (!document) {
         return res.status(404).json({ error: 'Document not found' });
+      }
+
+      // Then check read permission
+      const hasPermission = await permissionService.checkPermission(id, username, 'read');
+      if (!hasPermission) {
+        return res.status(403).json({ error: 'Insufficient permissions' });
       }
 
       res.json(document);
