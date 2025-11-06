@@ -1,6 +1,11 @@
-import { useState, useEffect, useRef } from 'react';
-import { MessageSquare, History, Users, Save, Download, Plus, FileText, Clock, ArrowLeft, Trash2 } from 'lucide-react';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { io } from 'socket.io-client';
+import { MessageSquare, History, Users, Save, Download, Plus, FileText, Clock, ArrowLeft, Trash2, Share2, Copy, Eye, Edit, LogOut } from 'lucide-react';
 import './App.css';
+
+// API base URL from environment or default - defined outside component to avoid re-creation
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:4000';
+const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 'http://localhost:4000';
 
 function App() {
   // State management
@@ -19,18 +24,364 @@ function App() {
   const [screen, setScreen] = useState('login'); // 'login', 'documents', 'editor'
   const [documents, setDocuments] = useState([]);
   const [loadingDocuments, setLoadingDocuments] = useState(false);
+  const [userRole, setUserRole] = useState(null); // 'owner', 'editor', 'viewer', null
+  const [shareLink, setShareLink] = useState(null);
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [shareAccess, setShareAccess] = useState('edit'); // 'read' or 'edit'
+  const [shareUsername, setShareUsername] = useState(''); // Username to share with
+  const [shareMethod, setShareMethod] = useState('link'); // 'link' or 'username'
+  const [sharedUsers, setSharedUsers] = useState([]); // List of users with access
+  const [unreadMessages, setUnreadMessages] = useState(0); // Unread message count
+  const [savedContent, setSavedContent] = useState(''); // Track saved content
+  const [savedTitle, setSavedTitle] = useState(''); // Track saved title
   
-  // Refs for WebSocket and text editor
-  const ws = useRef(null);
+  // Refs for Socket.IO and text editor
+  const socket = useRef(null);
   const textareaRef = useRef(null);
-  const reconnectTimeout = useRef(null);
+  const saveStatusTimeout = useRef(null);
+  const isMountedRef = useRef(true);
+  const handleServerMessageRef = useRef(null); // Ref to latest handleServerMessage
+  const documentChangeTimeout = useRef(null); // Debounce timer for document changes
+  const documentContentRef = useRef(''); // Ref to track current document content
+  const documentTitleRef = useRef(''); // Ref to track current document title
+
+  // Initialize from localStorage and URL on mount
+  useEffect(() => {
+    // Restore session from localStorage
+    const savedUser = localStorage.getItem('collabEdit_user');
+    const savedScreen = localStorage.getItem('collabEdit_screen');
+    const savedDocumentId = localStorage.getItem('collabEdit_documentId');
+    
+    // Check URL for document ID or share token
+    const path = window.location.pathname;
+    const documentMatch = path.match(/\/document\/([a-f0-9]+)/);
+    const shareMatch = path.match(/\/share\/([a-f0-9]+)/);
+    
+    if (savedUser) {
+      setCurrentUser(savedUser);
+      
+      if (shareMatch && shareMatch[1]) {
+        // Share token in URL - will be handled by joinDocumentByToken
+        setScreen('login'); // Stay on login until joined
+      } else if (documentMatch && documentMatch[1]) {
+        // Document ID in URL - only navigate if we were on editor screen
+        if (savedScreen === 'editor') {
+          const docId = documentMatch[1];
+          setDocumentId(docId);
+          setScreen('editor');
+        } else {
+          // User was on documents screen, stay there
+          setScreen(savedScreen || 'documents');
+        }
+      } else if (savedScreen === 'editor' && savedDocumentId) {
+        // Restore editor state
+        setDocumentId(savedDocumentId);
+        setScreen('editor');
+      } else {
+        setScreen(savedScreen || 'documents');
+      }
+    }
+  }, []);
+  
+  // Save session to localStorage when it changes
+  useEffect(() => {
+    if (currentUser) {
+      localStorage.setItem('collabEdit_user', currentUser);
+    }
+  }, [currentUser]);
+  
+  useEffect(() => {
+    if (screen !== 'login') {
+      localStorage.setItem('collabEdit_screen', screen);
+    }
+  }, [screen]);
+  
+  useEffect(() => {
+    if (documentId) {
+      localStorage.setItem('collabEdit_documentId', documentId);
+      // Update URL
+      window.history.pushState({}, '', `/document/${documentId}`);
+    } else if (screen === 'documents') {
+      window.history.pushState({}, '', '/documents');
+    }
+  }, [documentId, screen]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      if (saveStatusTimeout.current) {
+        clearTimeout(saveStatusTimeout.current);
+      }
+      if (socket.current) {
+        socket.current.disconnect();
+      }
+    };
+  }, []);
+
+  // Fetch documents from backend - memoized to avoid dependency issues
+  const fetchDocuments = useCallback(async () => {
+    if (!currentUser) return;
+    
+    setLoadingDocuments(true);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/documents`, {
+        headers: {
+          'x-username': currentUser
+        }
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      const data = await response.json();
+      if (isMountedRef.current) {
+      setDocuments(data);
+      }
+    } catch (error) {
+      console.error('Error fetching documents:', error);
+      if (isMountedRef.current) {
+      alert('Failed to fetch documents. Make sure the server is running.');
+      }
+    } finally {
+      if (isMountedRef.current) {
+      setLoadingDocuments(false);
+      }
+    }
+  }, [currentUser]);
+
+  // Handle messages from server - defined early to avoid hoisting issues
+  const handleServerMessage = useCallback((type, data) => {
+    switch(type) {
+      case 'init':
+        if (data.document) {
+          setDocumentContent(data.document.content || '');
+          setDocumentTitle(data.document.title || 'Untitled Document');
+          // Update saved state
+          setSavedContent(data.document.content || '');
+          setSavedTitle(data.document.title || 'Untitled Document');
+        }
+        if (data.users) {
+          setUsers(data.users);
+        }
+        break;
+        
+      case 'document_update':
+        // Update document content immediately when received from Socket.IO
+        if (data.content !== undefined) {
+          setDocumentContent(data.content);
+          // Don't update savedContent here - only update on save or init
+        }
+        break;
+        
+      case 'document_operation':
+        // Handle CRDT-based operations for real-time updates
+        if (data.content !== undefined) {
+          setDocumentContent(data.content);
+          // Don't update savedContent here - only update on save or init
+        }
+        break;
+        
+      case 'title_update':
+        setDocumentTitle(data.title);
+        break;
+        
+      case 'user_list_update':
+        setUsers(data.users);
+        break;
+        
+      case 'chat_message':
+        setMessages(prev => [...prev, data.message]);
+        // Increment unread count if chat is not open
+        setUnreadMessages(prev => showChat ? 0 : prev + 1);
+        break;
+        
+      case 'save_success':
+        console.log('✅ Save successful, document ID:', data.documentId);
+        if (saveStatusTimeout.current) {
+          clearTimeout(saveStatusTimeout.current);
+        }
+        setSaveStatus('✅ Saved successfully!');
+        if (data.documentId) {
+          const newDocId = data.documentId;
+          console.log('Current documentId:', documentId, 'New documentId:', newDocId);
+          
+          // If this is a new document (documentId was null), set user role to owner
+          setDocumentId(prevId => {
+            if (!prevId && currentUser) {
+              setUserRole('owner');
+            }
+            return newDocId;
+          });
+          
+          // Update URL
+          window.history.pushState({}, '', `/document/${newDocId}`);
+          
+          // Update saved state using refs to get current values
+          setSavedContent(documentContentRef.current);
+          setSavedTitle(documentTitleRef.current);
+          
+          // Note: Server will send 'init' message automatically after creating new document
+          // so we don't need to send set_document_id here
+        }
+        saveStatusTimeout.current = setTimeout(() => {
+          if (isMountedRef.current) {
+            setSaveStatus('');
+          }
+        }, 3000);
+        break;
+        
+      case 'save_error':
+        if (saveStatusTimeout.current) {
+          clearTimeout(saveStatusTimeout.current);
+        }
+        setSaveStatus(`❌ Save failed: ${data?.message || 'Unknown error'}`);
+        saveStatusTimeout.current = setTimeout(() => {
+          if (isMountedRef.current) {
+            setSaveStatus('');
+          }
+        }, 3000);
+        break;
+      
+      case 'error':
+        console.error('Server error:', data?.message);
+        if (isMountedRef.current) {
+          alert(`Error: ${data?.message || 'Unknown error'}`);
+        }
+        break;
+        
+      default:
+        console.log('Unknown message type:', type);
+    }
+  }, [documentId, showChat, currentUser]); // Removed documentContent and documentTitle from dependencies
+  
+  // Update ref whenever handleServerMessage changes
+  useEffect(() => {
+    handleServerMessageRef.current = handleServerMessage;
+  }, [handleServerMessage]);
+  
+  // Update refs when content/title changes
+  useEffect(() => {
+    documentContentRef.current = documentContent;
+  }, [documentContent]);
+  
+  useEffect(() => {
+    documentTitleRef.current = documentTitle;
+  }, [documentTitle]);
+
+  // Connect to Socket.IO server - defined early to avoid hoisting issues
+  const connectToServer = useCallback(() => {
+    // Don't connect if component unmounted
+    if (!isMountedRef.current) {
+      return;
+    }
+    
+    // Don't connect if not in editor screen or no user
+    if (screen !== 'editor' || !currentUser) {
+      return;
+    }
+    
+    // Don't reconnect if already connected
+    if (socket.current && socket.current.connected) {
+      return;
+    }
+
+    // Disconnect existing socket if any
+    if (socket.current) {
+      socket.current.disconnect();
+      socket.current = null;
+    }
+
+    try {
+      console.log('🔌 Connecting to Socket.IO server...');
+      socket.current = io(SOCKET_URL, {
+        transports: ['websocket', 'polling'],
+        reconnection: true,
+        reconnectionDelay: 1000,
+        reconnectionDelayMax: 5000,
+        reconnectionAttempts: Infinity,
+        timeout: 20000,
+        autoConnect: true
+      });
+      
+      socket.current.on('connect', () => {
+        if (!isMountedRef.current) {
+          socket.current?.disconnect();
+          return;
+        }
+        console.log('✅ Connected to server');
+        setIsConnected(true);
+        
+        // Send user join message
+        if (socket.current && socket.current.connected && currentUser) {
+          socket.current.emit('user_join', { username: currentUser });
+        }
+      });
+      
+      socket.current.on('disconnect', (reason) => {
+        if (!isMountedRef.current) return;
+        
+        console.log('❌ Disconnected from server:', reason);
+        setIsConnected(false);
+        
+        // Only manually reconnect if server disconnected us, not if client disconnected
+        // Socket.IO will handle automatic reconnection for other cases
+        if (reason === 'io server disconnect') {
+          // Server disconnected, reconnect manually after delay
+          setTimeout(() => {
+            if (isMountedRef.current && screen === 'editor' && currentUser && (!socket.current || !socket.current.connected)) {
+              connectToServer();
+            }
+          }, 1000);
+        }
+        // For 'io client disconnect', don't reconnect - it was intentional
+      });
+      
+      socket.current.on('connect_error', (error) => {
+        console.error('Socket.IO connection error:', error);
+        if (isMountedRef.current) {
+          setIsConnected(false);
+        }
+      });
+      
+      // Register all event handlers only once
+      // Remove any existing listeners first to prevent duplicates
+      socket.current.removeAllListeners('init');
+      socket.current.removeAllListeners('document_update');
+      socket.current.removeAllListeners('document_operation');
+      socket.current.removeAllListeners('title_update');
+      socket.current.removeAllListeners('user_list_update');
+      socket.current.removeAllListeners('chat_message');
+      socket.current.removeAllListeners('save_success');
+      socket.current.removeAllListeners('save_error');
+      socket.current.removeAllListeners('error');
+      
+      // Use ref to access latest handleServerMessage without recreating connection
+      socket.current.on('init', (data) => handleServerMessageRef.current?.('init', data));
+      socket.current.on('document_update', (data) => handleServerMessageRef.current?.('document_update', data));
+      socket.current.on('document_operation', (data) => handleServerMessageRef.current?.('document_operation', data));
+      socket.current.on('title_update', (data) => handleServerMessageRef.current?.('title_update', data));
+      socket.current.on('user_list_update', (data) => handleServerMessageRef.current?.('user_list_update', data));
+      socket.current.on('chat_message', (data) => handleServerMessageRef.current?.('chat_message', data));
+      socket.current.on('save_success', (data) => handleServerMessageRef.current?.('save_success', data));
+      socket.current.on('save_error', (data) => handleServerMessageRef.current?.('save_error', data));
+      socket.current.on('error', (data) => handleServerMessageRef.current?.('error', data));
+      
+    } catch (error) {
+      console.error('Failed to connect:', error);
+      if (isMountedRef.current) {
+        setIsConnected(false);
+        socket.current = null;
+      }
+    }
+  }, [currentUser, screen]); // Removed handleServerMessage from dependencies
 
   // Fetch documents when user logs in
   useEffect(() => {
     if (currentUser && screen === 'documents') {
       fetchDocuments();
     }
-  }, [currentUser, screen]);
+  }, [currentUser, screen, fetchDocuments]);
 
   // Initialize connection when entering editor
   useEffect(() => {
@@ -39,40 +390,57 @@ function App() {
     }
     
     return () => {
-      if (ws.current) {
-        ws.current.close();
+      // Clear debounce timer
+      if (documentChangeTimeout.current) {
+        clearTimeout(documentChangeTimeout.current);
+        documentChangeTimeout.current = null;
       }
-      if (reconnectTimeout.current) {
-        clearTimeout(reconnectTimeout.current);
+      
+      // Disconnect socket only when leaving editor screen
+      if (socket.current && screen !== 'editor') {
+        socket.current.disconnect();
+        socket.current = null;
+        setIsConnected(false);
       }
     };
-  }, [currentUser, screen]);
+  }, [currentUser, screen, connectToServer]);
 
   // Send document ID when connection is ready and we have a document ID
   useEffect(() => {
-    if (isConnected && documentId && ws.current && ws.current.readyState === WebSocket.OPEN) {
-      console.log('🔗 Connection ready, sending document ID:', documentId);
-      ws.current.send(JSON.stringify({
-        type: 'set_document_id',
-        documentId: documentId
-      }));
+    if (isConnected && documentId && socket.current && socket.current.connected) {
+      // Don't send if we just received save_success (server will send init)
+      // Check if this is a new document by checking if content is empty
+      const isNewDocument = !documentContent || documentContent.length === 0;
+      
+      if (!isNewDocument) {
+        console.log('🔗 Connection ready, sending document ID:', documentId);
+        // Use a small delay to ensure connection is fully established
+        const timeoutId = setTimeout(() => {
+          if (socket.current && socket.current.connected && documentId) {
+            socket.current.emit('set_document_id', { documentId: documentId });
+          }
+        }, 500);
+        
+        return () => clearTimeout(timeoutId);
+      }
     }
-  }, [isConnected, documentId]);
+  }, [isConnected, documentId, documentContent]);
 
-  // Fetch documents from backend
-  const fetchDocuments = async () => {
-    setLoadingDocuments(true);
-    try {
-      const response = await fetch('http://localhost:5000/api/documents');
-      const data = await response.json();
-      setDocuments(data);
-    } catch (error) {
-      console.error('Error fetching documents:', error);
-      alert('Failed to fetch documents. Make sure the server is running.');
-    } finally {
-      setLoadingDocuments(false);
+  // Load document when documentId is set (e.g., from URL or after save)
+  useEffect(() => {
+    if (documentId && currentUser && screen === 'editor' && isConnected) {
+      // Only load if we don't have content yet (new document or loaded from URL)
+      const hasContent = documentContent && documentContent.length > 0;
+      const isUntitled = documentTitle === 'Untitled Document';
+      
+      if (!hasContent && isUntitled) {
+        console.log('📄 Loading document from server:', documentId);
+        openDocument({ _id: documentId }).catch(err => {
+          console.error('Error loading document:', err);
+        });
+      }
     }
-  };
+  }, [documentId, currentUser, screen, isConnected]);
 
   // Create new document
   const createNewDocument = () => {
@@ -95,7 +463,14 @@ function App() {
     
     // Fetch the latest version from server to ensure we have current data
     try {
-      const response = await fetch(`http://localhost:5000/api/documents/${doc._id}`);
+      const response = await fetch(`${API_BASE_URL}/api/documents/${doc._id}`, {
+        headers: {
+          'x-username': currentUser
+        }
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
       const fullDoc = await response.json();
       
       console.log('✅ Fetched full document:', {
@@ -104,18 +479,41 @@ function App() {
         id: fullDoc._id
       });
       
-      // Set all state from the fetched document
-      setDocumentContent(fullDoc.content || '');
-      setDocumentTitle(fullDoc.title || 'Untitled Document');
-      setDocumentId(fullDoc._id);
-      setMessages([]);
+      // Determine user role
+      let role = null;
+      if (fullDoc.owner === currentUser) {
+        role = 'owner';
+      } else {
+        const permission = fullDoc.permissions?.find(p => p.username === currentUser);
+        role = permission ? permission.role : null;
+      }
+      setUserRole(role);
       
-      // Switch to editor after state is set
-      setScreen('editor');
+      // Set all state from the fetched document
+      if (isMountedRef.current) {
+        setDocumentContent(fullDoc.content || '');
+        setDocumentTitle(fullDoc.title || 'Untitled Document');
+        setDocumentId(fullDoc._id);
+        setMessages([]);
+        
+        // Update saved state
+        setSavedContent(fullDoc.content || '');
+        setSavedTitle(fullDoc.title || 'Untitled Document');
+        
+        // Update URL
+        window.history.pushState({}, '', `/document/${fullDoc._id}`);
+        
+        // Switch to editor after state is set
+        setScreen('editor');
+      }
       
     } catch (error) {
       console.error('❌ Error fetching document:', error);
-      alert('Failed to open document');
+      if (isMountedRef.current) {
+        alert('Failed to open document. Please try again.');
+        // Go back to documents if error
+        setScreen('documents');
+      }
     }
   };
 
@@ -130,8 +528,11 @@ function App() {
     if (!confirmed) return;
     
     try {
-      const response = await fetch(`http://localhost:5000/api/documents/${docId}`, {
-        method: 'DELETE'
+      const response = await fetch(`${API_BASE_URL}/api/documents/${docId}`, {
+        method: 'DELETE',
+        headers: {
+          'x-username': currentUser
+        }
       });
       
       if (response.ok) {
@@ -139,18 +540,50 @@ function App() {
         // Refresh the documents list
         fetchDocuments();
       } else {
-        throw new Error('Failed to delete document');
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `Failed to delete document: ${response.status}`);
       }
     } catch (error) {
       console.error('Error deleting document:', error);
-      alert('Failed to delete document. Please try again.');
+      if (isMountedRef.current) {
+        alert(`Failed to delete document: ${error.message}`);
+      }
     }
+  };
+
+  // Logout function
+  const handleLogout = () => {
+    // Close Socket.IO connection
+    if (socket.current) {
+      socket.current.disconnect();
+      socket.current = null;
+    }
+    
+    // Clear localStorage
+    localStorage.removeItem('collabEdit_user');
+    localStorage.removeItem('collabEdit_screen');
+    localStorage.removeItem('collabEdit_documentId');
+    
+    // Reset state
+    setCurrentUser(null);
+    setScreen('login');
+    setDocumentId(null);
+    setDocumentContent('');
+    setDocumentTitle('Untitled Document');
+    setDocuments([]);
+    setMessages([]);
+    setIsConnected(false);
+    setUserRole(null);
+    
+    // Reset URL
+    window.history.pushState({}, '', '/');
   };
 
   // Go back to documents list
   const backToDocuments = () => {
-    if (ws.current) {
-      ws.current.close();
+    if (socket.current) {
+      socket.current.disconnect();
+      socket.current = null;
     }
     setIsConnected(false);
     setMessages([]);
@@ -158,131 +591,46 @@ function App() {
     fetchDocuments();
   };
 
-  // Connect to WebSocket server
-  const connectToServer = () => {
-    try {
-      ws.current = new WebSocket('ws://localhost:5000');
-      
-      ws.current.onopen = () => {
-        console.log('✅ Connected to server');
-        setIsConnected(true);
-        
-        ws.current.send(JSON.stringify({
-          type: 'user_join',
-          username: currentUser
-        }));
-      };
-      
-      ws.current.onmessage = (event) => {
-        try {
-          const message = JSON.parse(event.data);
-          handleServerMessage(message);
-        } catch (error) {
-          console.error('Error parsing message:', error);
-        }
-      };
-      
-      ws.current.onerror = (error) => {
-        console.error('WebSocket error:', error);
-        setIsConnected(false);
-      };
-      
-      ws.current.onclose = () => {
-        console.log('❌ Disconnected from server');
-        setIsConnected(false);
-        
-        reconnectTimeout.current = setTimeout(() => {
-          console.log('🔄 Attempting to reconnect...');
-          connectToServer();
-        }, 3000);
-      };
-      
-    } catch (error) {
-      console.error('Failed to connect:', error);
-      setIsConnected(false);
-    }
-  };
-
-  // Handle messages from server
-  const handleServerMessage = (message) => {
-    switch(message.type) {
-      case 'init':
-        if (message.data.document) {
-          setDocumentContent(message.data.document.content || '');
-          setDocumentTitle(message.data.document.title || 'Untitled Document');
-        }
-        if (message.data.users) {
-          setUsers(message.data.users);
-        }
-        break;
-        
-      case 'document_update':
-        setDocumentContent(message.data.content);
-        break;
-        
-      case 'title_update':
-        setDocumentTitle(message.data.title);
-        break;
-        
-      case 'user_list_update':
-        setUsers(message.data.users);
-        break;
-        
-      case 'chat_message':
-        setMessages(prev => [...prev, message.data.message]);
-        break;
-        
-      case 'save_success':
-        console.log('✅ Save successful, document ID:', message.data.documentId);
-        setSaveStatus('✅ Saved successfully!');
-        if (message.data.documentId) {
-          const newDocId = message.data.documentId;
-          console.log('Current documentId:', documentId, 'New documentId:', newDocId);
-          // Always update the document ID from server
-          setDocumentId(newDocId);
-          
-          // Also send it to server to make sure it's stored
-          if (ws.current && ws.current.readyState === WebSocket.OPEN) {
-            ws.current.send(JSON.stringify({
-              type: 'set_document_id',
-              documentId: newDocId
-            }));
-          }
-        }
-        setTimeout(() => setSaveStatus(''), 3000);
-        break;
-        
-      case 'save_error':
-        setSaveStatus('❌ Save failed');
-        setTimeout(() => setSaveStatus(''), 3000);
-        break;
-        
-      default:
-        console.log('Unknown message type:', message.type);
-    }
-  };
-
   const handleDocumentChange = (e) => {
+    // Check if user has write permission
+    if (userRole === 'viewer') {
+      return; // Don't allow changes for viewers
+    }
+    
     const newContent = e.target.value;
     setDocumentContent(newContent);
     
-    if (ws.current && ws.current.readyState === WebSocket.OPEN) {
-      ws.current.send(JSON.stringify({
-        type: 'document_change',
-        content: newContent
-      }));
+    // Debounce Socket.IO updates to prevent lag when typing fast
+    // Clear previous timeout
+    if (documentChangeTimeout.current) {
+      clearTimeout(documentChangeTimeout.current);
+    }
+    
+    // Send update via Socket.IO for real-time collaboration (debounced)
+    if (socket.current && socket.current.connected && documentId) {
+      // Send immediately for small changes, debounce for larger content
+      const contentLength = newContent.length;
+      const delay = contentLength > 1000 ? 150 : 50; // Longer delay for larger documents
+      
+      documentChangeTimeout.current = setTimeout(() => {
+        if (socket.current && socket.current.connected && documentId) {
+          socket.current.emit('document_change', { content: newContent });
+        }
+      }, delay);
     }
   };
 
   const handleTitleChange = (e) => {
+    // Check if user has write permission
+    if (userRole === 'viewer') {
+      return; // Don't allow title changes for viewers
+    }
+    
     const newTitle = e.target.value;
     setDocumentTitle(newTitle);
     
-    if (ws.current && ws.current.readyState === WebSocket.OPEN) {
-      ws.current.send(JSON.stringify({
-        type: 'title_change',
-        title: newTitle
-      }));
+    if (socket.current && socket.current.connected) {
+      socket.current.emit('title_change', { title: newTitle });
     }
   };
 
@@ -315,11 +663,8 @@ function App() {
     const newContent = documentContent.substring(0, start) + formattedText + documentContent.substring(end);
     setDocumentContent(newContent);
     
-    if (ws.current && ws.current.readyState === WebSocket.OPEN) {
-      ws.current.send(JSON.stringify({
-        type: 'document_change',
-        content: newContent
-      }));
+    if (socket.current && socket.current.connected && documentId) {
+      socket.current.emit('document_change', { content: newContent });
     }
     
     setTimeout(() => {
@@ -329,36 +674,60 @@ function App() {
   };
 
   const sendMessage = () => {
-    if (newMessage.trim() && ws.current && ws.current.readyState === WebSocket.OPEN) {
+    if (newMessage.trim() && socket.current && socket.current.connected && documentId) {
       const message = {
         id: Date.now(),
-        user: currentUser,
-        text: newMessage,
+        text: newMessage.trim(),
         timestamp: new Date().toLocaleTimeString()
       };
       
-      ws.current.send(JSON.stringify({
-        type: 'chat_message',
-        message: message
-      }));
+      socket.current.emit('chat_message', { message: message });
       
       setNewMessage('');
     }
   };
 
   const saveDocument = () => {
-    console.log('Save button clicked');
-    if (ws.current && ws.current.readyState === WebSocket.OPEN) {
-      console.log('Sending save request to server...');
-      setSaveStatus('💾 Saving...');
-      ws.current.send(JSON.stringify({
-        type: 'save_document'
-      }));
+    // Prevent saving if documentId exists and we're trying to create a new document
+    if (documentId) {
+      // This is an existing document, just save it
+      console.log('Save button clicked for existing document');
     } else {
-      console.error('WebSocket not connected');
+      // This is a new document, but check if we already have a pending save
+      console.log('Save button clicked for new document');
+    }
+    
+    if (socket.current && socket.current.connected) {
+      console.log('Sending save request to server...');
+      if (saveStatusTimeout.current) {
+        clearTimeout(saveStatusTimeout.current);
+      }
+      setSaveStatus('💾 Saving...');
+      
+      // Only send content/title if this is a new document (no documentId)
+      // For existing documents, server will use CRDT content
+      if (documentId) {
+        socket.current.emit('save_document', {});
+      } else {
+        socket.current.emit('save_document', {
+          content: documentContent,
+          title: documentTitle
+        });
+      }
+    } else {
+      console.error('Socket.IO not connected');
+      if (saveStatusTimeout.current) {
+        clearTimeout(saveStatusTimeout.current);
+      }
       setSaveStatus('❌ Not connected');
-      alert('Not connected to server. Please wait for reconnection.');
-      setTimeout(() => setSaveStatus(''), 3000);
+      if (isMountedRef.current) {
+        alert('Not connected to server. Please wait for reconnection.');
+        saveStatusTimeout.current = setTimeout(() => {
+          if (isMountedRef.current) {
+            setSaveStatus('');
+          }
+        }, 3000);
+      }
     }
   };
 
@@ -375,11 +744,20 @@ function App() {
       window.document.body.removeChild(link);
       URL.revokeObjectURL(url);
       
+      if (saveStatusTimeout.current) {
+        clearTimeout(saveStatusTimeout.current);
+      }
       setSaveStatus('✅ Downloaded!');
-      setTimeout(() => setSaveStatus(''), 2000);
+      saveStatusTimeout.current = setTimeout(() => {
+        if (isMountedRef.current) {
+          setSaveStatus('');
+        }
+      }, 2000);
     } catch (error) {
       console.error('Download error:', error);
+      if (isMountedRef.current) {
       alert('Failed to download document: ' + error.message);
+      }
     }
   };
 
@@ -398,6 +776,212 @@ function App() {
     if (diffDays < 7) return `${diffDays} days ago`;
     return date.toLocaleDateString();
   };
+
+  // Generate share link
+  const generateShareLink = async () => {
+    if (!documentId) {
+      alert('Please save the document first before sharing');
+      return;
+    }
+
+    try {
+      // Fetch document to get current permissions and share link
+      const docResponse = await fetch(`${API_BASE_URL}/api/documents/${documentId}`, {
+        headers: {
+          'x-username': currentUser
+        }
+      });
+      
+      if (docResponse.ok) {
+        const doc = await docResponse.json();
+        // Set share link if exists
+        if (doc.shareToken) {
+          const baseUrl = window.location.origin;
+          setShareLink(`${baseUrl}/share/${doc.shareToken}`);
+        }
+        // Set shared users from permissions
+        setSharedUsers(doc.permissions || []);
+      }
+      
+      // Generate or update share link
+      const response = await fetch(`${API_BASE_URL}/api/documents/${documentId}/share`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-username': currentUser
+        },
+        body: JSON.stringify({ access: shareAccess })
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to generate share link');
+      }
+
+      const data = await response.json();
+      setShareLink(data.shareUrl);
+      
+      // Refresh document to get updated permissions
+      const refreshResponse = await fetch(`${API_BASE_URL}/api/documents/${documentId}`, {
+        headers: {
+          'x-username': currentUser
+        }
+      });
+      if (refreshResponse.ok) {
+        const refreshedDoc = await refreshResponse.json();
+        setSharedUsers(refreshedDoc.permissions || []);
+      }
+      
+      setShowShareModal(true);
+    } catch (error) {
+      console.error('Error generating share link:', error);
+      alert('Failed to generate share link: ' + error.message);
+    }
+  };
+
+  // Copy share link to clipboard
+  const copyShareLink = () => {
+    if (shareLink) {
+      navigator.clipboard.writeText(shareLink).then(() => {
+        alert('Share link copied to clipboard!');
+      }).catch(err => {
+        console.error('Failed to copy:', err);
+        alert('Failed to copy link');
+      });
+    }
+  };
+
+  // Revoke share link
+  const revokeShareLink = async () => {
+    if (!documentId) return;
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/documents/${documentId}/share`, {
+        method: 'DELETE',
+        headers: {
+          'x-username': currentUser
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to revoke share link');
+      }
+
+      setShareLink(null);
+      setShowShareModal(false);
+      alert('Share link revoked successfully');
+    } catch (error) {
+      console.error('Error revoking share link:', error);
+      alert('Failed to revoke share link: ' + error.message);
+    }
+  };
+
+  // Share document by username
+  const shareByUsername = async () => {
+    if (!documentId) {
+      alert('Please save the document first before sharing');
+      return;
+    }
+
+    if (!shareUsername.trim()) {
+      alert('Please enter a username');
+      return;
+    }
+
+    try {
+      // Determine role based on access level
+      const role = shareAccess === 'edit' ? 'editor' : 'viewer';
+      
+      const response = await fetch(`${API_BASE_URL}/api/documents/${documentId}/permissions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-username': currentUser
+        },
+        body: JSON.stringify({ username: shareUsername.trim(), role })
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to share document');
+      }
+
+      alert(`Document shared with ${shareUsername.trim()} successfully!`);
+      setShareUsername('');
+      
+      // Refresh document to get updated permissions
+      const refreshResponse = await fetch(`${API_BASE_URL}/api/documents/${documentId}`, {
+        headers: {
+          'x-username': currentUser
+        }
+      });
+      if (refreshResponse.ok) {
+        const refreshedDoc = await refreshResponse.json();
+        setSharedUsers(refreshedDoc.permissions || []);
+      }
+      
+      // Refresh documents list to show shared documents
+      fetchDocuments();
+    } catch (error) {
+      console.error('Error sharing document:', error);
+      alert('Failed to share document: ' + error.message);
+    }
+  };
+
+  // Join document via share token
+  const joinDocumentByToken = async (token) => {
+    if (!currentUser) {
+      alert('Please login first');
+      return;
+    }
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/documents/share/${token}`, {
+        method: 'GET',
+        headers: {
+          'x-username': currentUser
+        }
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to join document');
+      }
+
+      const data = await response.json();
+      
+      // Set user role based on access
+      if (data.access === 'read') {
+        setUserRole('viewer');
+      } else if (data.access === 'edit') {
+        setUserRole('editor');
+      }
+
+      // Open the document
+      await openDocument({ _id: data.documentId, title: data.title });
+      
+      // Remove token from URL
+      window.history.replaceState({}, '', `/document/${data.documentId}`);
+    } catch (error) {
+      console.error('Error joining document:', error);
+      alert('Failed to join document: ' + error.message);
+    }
+  };
+
+  // Check for share token in URL on mount
+  useEffect(() => {
+    const path = window.location.pathname;
+    const shareMatch = path.match(/\/share\/([a-f0-9]+)/);
+    if (shareMatch && shareMatch[1]) {
+      const token = shareMatch[1];
+      // Wait for user to login, then join
+      if (currentUser) {
+        joinDocumentByToken(token).catch(err => {
+          console.error('Error joining document:', err);
+        });
+      }
+    }
+  }, [currentUser]);
 
   // Login screen
   if (screen === 'login') {
@@ -418,7 +1002,7 @@ function App() {
                 onChange={(e) => setUsername(e.target.value)}
                 className="form-input"
                 placeholder="Your name"
-                onKeyPress={(e) => {
+                onKeyDown={(e) => {
                   if (e.key === 'Enter' && username.trim()) {
                     setCurrentUser(username);
                     setScreen('documents');
@@ -446,6 +1030,10 @@ function App() {
 
   // Documents list screen
   if (screen === 'documents') {
+    // Separate documents into owned and shared
+    const ownedDocuments = documents.filter(doc => doc.owner === currentUser);
+    const sharedDocuments = documents.filter(doc => doc.owner !== currentUser);
+    
     return (
       <div className="documents-container">
         <div className="documents-header">
@@ -454,10 +1042,32 @@ function App() {
               <h1 className="documents-title">My Documents</h1>
               <p className="documents-subtitle">Welcome back, {currentUser}!</p>
             </div>
-            <button onClick={createNewDocument} className="btn-new-document">
-              <Plus size={20} />
-              <span>New Document</span>
-            </button>
+            <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+              <button onClick={createNewDocument} className="btn-new-document">
+                <Plus size={20} />
+                <span>New Document</span>
+              </button>
+              <button onClick={handleLogout} className="btn-logout" style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                background: '#ef4444',
+                color: 'white',
+                padding: '10px 20px',
+                border: 'none',
+                borderRadius: '8px',
+                fontSize: '14px',
+                fontWeight: '600',
+                cursor: 'pointer',
+                transition: 'all 0.2s'
+              }}
+              onMouseEnter={(e) => e.target.style.background = '#dc2626'}
+              onMouseLeave={(e) => e.target.style.background = '#ef4444'}
+              >
+                <LogOut size={18} />
+                <span>Logout</span>
+              </button>
+            </div>
           </div>
         </div>
 
@@ -478,36 +1088,108 @@ function App() {
               </button>
             </div>
           ) : (
-            <div className="documents-grid">
-              {documents.map((doc) => (
-                <div key={doc._id} className="document-card">
-                  <div className="document-card-header">
-                    <FileText size={24} className="document-icon" />
-                    <button 
-                      className="btn-delete-doc"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        deleteDocument(doc._id, doc.title, e);
-                      }}
-                      title="Delete document"
-                    >
-                      <Trash2 size={20} />
-                    </button>
-                  </div>
-                  <div className="document-card-body" onClick={() => openDocument(doc)}>
-                    <h3 className="document-card-title">{doc.title}</h3>
-                    <p className="document-card-preview">
-                      {doc.content ? doc.content.substring(0, 100) + (doc.content.length > 100 ? '...' : '') : 'Empty document'}
-                    </p>
-                  </div>
-                  <div className="document-card-footer" onClick={() => openDocument(doc)}>
-                    <div className="document-meta">
-                      <Clock size={14} />
-                      <span>{formatDate(doc.updatedAt)}</span>
-                    </div>
+            <div>
+              {/* Owned Documents Section */}
+              {ownedDocuments.length > 0 && (
+                <div style={{ marginBottom: '40px' }}>
+                  <h2 style={{ 
+                    fontSize: '24px', 
+                    fontWeight: '600', 
+                    color: '#f1f5f9', 
+                    marginBottom: '20px',
+                    paddingBottom: '12px',
+                    borderBottom: '2px solid #334155'
+                  }}>
+                    Owned Documents
+                  </h2>
+                  <div className="documents-grid">
+                    {ownedDocuments.map((doc) => (
+                      <div key={doc._id} className="document-card">
+                        <div className="document-card-header">
+                          <FileText size={24} className="document-icon" />
+                          <button 
+                            className="btn-delete-doc"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              deleteDocument(doc._id, doc.title, e);
+                            }}
+                            title="Delete document"
+                          >
+                            <Trash2 size={20} />
+                          </button>
+                        </div>
+                        <div className="document-card-body" onClick={() => openDocument(doc)}>
+                          <h3 className="document-card-title">{doc.title}</h3>
+                          <p className="document-card-preview">
+                            {doc.content ? doc.content.substring(0, 100) + (doc.content.length > 100 ? '...' : '') : 'Empty document'}
+                          </p>
+                        </div>
+                        <div className="document-card-footer" onClick={() => openDocument(doc)}>
+                          <div className="document-meta">
+                            <Clock size={14} />
+                            <span>{formatDate(doc.updatedAt)}</span>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 </div>
-              ))}
+              )}
+
+              {/* Shared Documents Section */}
+              {sharedDocuments.length > 0 && (
+                <div>
+                  <h2 style={{ 
+                    fontSize: '24px', 
+                    fontWeight: '600', 
+                    color: '#f1f5f9', 
+                    marginBottom: '20px',
+                    paddingBottom: '12px',
+                    borderBottom: '2px solid #334155'
+                  }}>
+                    Shared with Me
+                  </h2>
+                  <div className="documents-grid">
+                    {sharedDocuments.map((doc) => {
+                      const permission = doc.permissions?.find(p => p.username === currentUser);
+                      const role = permission ? permission.role : 'viewer';
+                      
+                      return (
+                        <div key={doc._id} className="document-card">
+                          <div className="document-card-header">
+                            <FileText size={24} className="document-icon" />
+                            {/* No delete button for shared documents */}
+                          </div>
+                          <div className="document-card-body" onClick={() => openDocument(doc)}>
+                            <h3 className="document-card-title">{doc.title}</h3>
+                            <p className="document-card-preview">
+                              {doc.content ? doc.content.substring(0, 100) + (doc.content.length > 100 ? '...' : '') : 'Empty document'}
+                            </p>
+                            <div style={{ 
+                              marginTop: '8px', 
+                              fontSize: '12px', 
+                              color: '#94a3b8',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '4px'
+                            }}>
+                              <span>Owner: {doc.owner}</span>
+                              <span>•</span>
+                              <span>Access: {role === 'editor' ? 'Can Edit' : 'Read Only'}</span>
+                            </div>
+                          </div>
+                          <div className="document-card-footer" onClick={() => openDocument(doc)}>
+                            <div className="document-meta">
+                              <Clock size={14} />
+                              <span>{formatDate(doc.updatedAt)}</span>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -530,6 +1212,7 @@ function App() {
               value={documentTitle}
               onChange={handleTitleChange}
               className="document-title-input"
+              disabled={userRole === 'viewer'}
             />
           </div>
           
@@ -552,14 +1235,46 @@ function App() {
               </span>
             )}
             
-            <button onClick={saveDocument} className="btn-save" disabled={!isConnected}>
+            <button onClick={saveDocument} className="btn-save" disabled={
+              !isConnected || 
+              userRole === 'viewer' || 
+              (documentContent === savedContent && documentTitle === savedTitle && documentId)
+            }>
               <Save className="icon" size={16} />
               <span>Save</span>
             </button>
             
+            {userRole === 'owner' && (
+              <button onClick={generateShareLink} className="btn-share">
+                <Share2 className="icon" size={16} />
+                <span>Share</span>
+              </button>
+            )}
+            
             <button onClick={downloadDocument} className="btn-download">
               <Download className="icon" size={16} />
               <span>Download</span>
+            </button>
+            
+            <button onClick={handleLogout} className="btn-logout" style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              background: '#ef4444',
+              color: 'white',
+              padding: '10px 20px',
+              border: 'none',
+              borderRadius: '8px',
+              fontSize: '14px',
+              fontWeight: '600',
+              cursor: 'pointer',
+              transition: 'all 0.2s'
+            }}
+            onMouseEnter={(e) => e.target.style.background = '#dc2626'}
+            onMouseLeave={(e) => e.target.style.background = '#ef4444'}
+            >
+              <LogOut size={18} />
+              <span>Logout</span>
             </button>
           </div>
         </div>
@@ -567,15 +1282,31 @@ function App() {
 
       <div className="toolbar">
         <div className="toolbar-content">
-          <button onClick={() => formatText('bold')} className="toolbar-btn bold" title="Bold">
+          <button onClick={() => formatText('bold')} className="toolbar-btn bold" title="Bold" disabled={userRole === 'viewer'}>
             B
           </button>
-          <button onClick={() => formatText('italic')} className="toolbar-btn italic" title="Italic">
+          <button onClick={() => formatText('italic')} className="toolbar-btn italic" title="Italic" disabled={userRole === 'viewer'}>
             I
           </button>
-          <button onClick={() => formatText('underline')} className="toolbar-btn underline" title="Underline">
+          <button onClick={() => formatText('underline')} className="toolbar-btn underline" title="Underline" disabled={userRole === 'viewer'}>
             U
           </button>
+          
+          <div className="toolbar-divider"></div>
+          
+          {userRole === 'viewer' && (
+            <span className="viewer-badge" style={{ marginLeft: '10px', padding: '4px 12px', background: '#fbbf24', color: '#000', borderRadius: '4px', fontSize: '12px', fontWeight: 'bold' }}>
+              <Eye size={14} style={{ marginRight: '4px', verticalAlign: 'middle' }} />
+              Read Only
+            </span>
+          )}
+          
+          {userRole === 'editor' && (
+            <span className="editor-badge" style={{ marginLeft: '10px', padding: '4px 12px', background: '#3b82f6', color: '#fff', borderRadius: '4px', fontSize: '12px', fontWeight: 'bold' }}>
+              <Edit size={14} style={{ marginRight: '4px', verticalAlign: 'middle' }} />
+              Editor
+            </span>
+          )}
           
           <div className="toolbar-divider"></div>
           
@@ -584,10 +1315,41 @@ function App() {
             <span>History</span>
           </button>
           
-          <button onClick={() => setShowChat(!showChat)} className="toolbar-btn">
-            <MessageSquare className="icon" size={16} />
-            <span>Chat</span>
-          </button>
+          {users.length > 1 && (
+            <button 
+              onClick={() => {
+                setShowChat(!showChat);
+                if (!showChat) {
+                  // Clear unread count when opening chat
+                  setUnreadMessages(0);
+                }
+              }} 
+              className="toolbar-btn"
+              style={{ position: 'relative' }}
+            >
+              <MessageSquare className="icon" size={16} />
+              <span>Chat</span>
+              {unreadMessages > 0 && (
+                <span style={{
+                  position: 'absolute',
+                  top: '-4px',
+                  right: '-4px',
+                  background: '#ef4444',
+                  color: 'white',
+                  borderRadius: '50%',
+                  width: '20px',
+                  height: '20px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: '11px',
+                  fontWeight: 'bold'
+                }}>
+                  {unreadMessages > 9 ? '9+' : unreadMessages}
+                </span>
+              )}
+            </button>
+          )}
         </div>
       </div>
 
@@ -599,8 +1361,8 @@ function App() {
               value={documentContent}
               onChange={handleDocumentChange}
               className="editor-textarea"
-              placeholder="Start typing your document..."
-              disabled={!isConnected}
+              placeholder={userRole === 'viewer' ? 'You have read-only access to this document...' : 'Start typing your document...'}
+              disabled={!isConnected || userRole === 'viewer'}
             />
           </div>
         </div>
@@ -633,7 +1395,12 @@ function App() {
                   type="text"
                   value={newMessage}
                   onChange={(e) => setNewMessage(e.target.value)}
-                  onKeyPress={(e) => e.key === 'Enter' && sendMessage()}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      sendMessage();
+                    }
+                  }}
                   placeholder="Type a message..."
                   className="chat-input"
                   disabled={!isConnected}
@@ -645,6 +1412,338 @@ function App() {
                 >
                   Send
                 </button>
+              </div>
+            </div>
+          </div>
+        )}
+        
+        {showShareModal && (
+          <div className="modal-overlay" onClick={() => setShowShareModal(false)}>
+            <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+              <div className="modal-header">
+                <h2>Share Document</h2>
+                <button className="modal-close" onClick={() => setShowShareModal(false)}>×</button>
+              </div>
+              <div className="modal-body">
+                <div style={{ marginBottom: '20px' }}>
+                  <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold' }}>Share Method:</label>
+                  <div style={{ display: 'flex', gap: '10px', marginBottom: '12px' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }}>
+                      <input
+                        type="radio"
+                        value="link"
+                        checked={shareMethod === 'link'}
+                        onChange={(e) => setShareMethod(e.target.value)}
+                        style={{ marginRight: '6px' }}
+                      />
+                      Share Link
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }}>
+                      <input
+                        type="radio"
+                        value="username"
+                        checked={shareMethod === 'username'}
+                        onChange={(e) => setShareMethod(e.target.value)}
+                        style={{ marginRight: '6px' }}
+                      />
+                      Share by Username
+                    </label>
+                  </div>
+                </div>
+                
+                <div style={{ marginBottom: '20px' }}>
+                  <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold' }}>Access Level:</label>
+                  <div style={{ display: 'flex', gap: '10px' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }}>
+                      <input
+                        type="radio"
+                        value="read"
+                        checked={shareAccess === 'read'}
+                        onChange={(e) => setShareAccess(e.target.value)}
+                        style={{ marginRight: '6px' }}
+                      />
+                      <Eye size={16} style={{ marginRight: '4px' }} />
+                      Read Only
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }}>
+                      <input
+                        type="radio"
+                        value="edit"
+                        checked={shareAccess === 'edit'}
+                        onChange={(e) => setShareAccess(e.target.value)}
+                        style={{ marginRight: '6px' }}
+                      />
+                      <Edit size={16} style={{ marginRight: '4px' }} />
+                      Can Edit
+                    </label>
+                  </div>
+                </div>
+                
+                {shareMethod === 'username' ? (
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold' }}>Username:</label>
+                    <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
+                      <input
+                        type="text"
+                        value={shareUsername}
+                        onChange={(e) => setShareUsername(e.target.value)}
+                        placeholder="Enter username"
+                        style={{
+                          flex: 1,
+                          padding: '8px',
+                          border: '1px solid #ddd',
+                          borderRadius: '4px',
+                          fontSize: '14px'
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            shareByUsername();
+                          }
+                        }}
+                      />
+                      <button
+                        onClick={shareByUsername}
+                        disabled={!shareUsername.trim()}
+                        style={{
+                          padding: '8px 16px',
+                          background: '#3b82f6',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '4px',
+                          cursor: shareUsername.trim() ? 'pointer' : 'not-allowed',
+                          opacity: shareUsername.trim() ? 1 : 0.5
+                        }}
+                      >
+                        Share
+                      </button>
+                    </div>
+                    
+                    {/* Show shared users list */}
+                    {sharedUsers.length > 0 && (
+                      <div style={{ marginTop: '24px', paddingTop: '20px', borderTop: '1px solid #e5e7eb' }}>
+                        <label style={{ display: 'block', marginBottom: '12px', fontWeight: 'bold' }}>Shared Users:</label>
+                        <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
+                          {sharedUsers.map((perm, index) => (
+                            <div key={index} style={{
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              alignItems: 'center',
+                              padding: '8px 12px',
+                              marginBottom: '8px',
+                              background: '#f3f4f6',
+                              borderRadius: '6px'
+                            }}>
+                              <span style={{ fontWeight: '500', color: '#1f2937' }}>{perm.username}</span>
+                              {userRole === 'owner' && (
+                                <select
+                                  value={perm.role}
+                                  onChange={async (e) => {
+                                    const newRole = e.target.value;
+                                    try {
+                                      const response = await fetch(`${API_BASE_URL}/api/documents/${documentId}/permissions`, {
+                                        method: 'POST',
+                                        headers: {
+                                          'Content-Type': 'application/json',
+                                          'x-username': currentUser
+                                        },
+                                        body: JSON.stringify({ username: perm.username, role: newRole })
+                                      });
+                                      if (response.ok) {
+                                        // Refresh shared users list
+                                        const refreshResponse = await fetch(`${API_BASE_URL}/api/documents/${documentId}`, {
+                                          headers: { 'x-username': currentUser }
+                                        });
+                                        if (refreshResponse.ok) {
+                                          const refreshedDoc = await refreshResponse.json();
+                                          setSharedUsers(refreshedDoc.permissions || []);
+                                        }
+                                      } else {
+                                        const error = await response.json();
+                                        throw new Error(error.error || 'Failed to update access');
+                                      }
+                                    } catch (error) {
+                                      console.error('Error updating user access:', error);
+                                      alert('Failed to update user access: ' + error.message);
+                                    }
+                                  }}
+                                  style={{
+                                    padding: '4px 8px',
+                                    borderRadius: '4px',
+                                    fontSize: '12px',
+                                    fontWeight: '600',
+                                    background: perm.role === 'editor' ? '#3b82f6' : '#6b7280',
+                                    color: 'white',
+                                    border: 'none',
+                                    cursor: 'pointer'
+                                  }}
+                                >
+                                  <option value="editor">Editor</option>
+                                  <option value="viewer">Viewer</option>
+                                </select>
+                              )}
+                              {userRole !== 'owner' && (
+                                <span style={{
+                                  padding: '4px 8px',
+                                  borderRadius: '4px',
+                                  fontSize: '12px',
+                                  fontWeight: '600',
+                                  background: perm.role === 'editor' ? '#3b82f6' : '#6b7280',
+                                  color: 'white'
+                                }}>
+                                  {perm.role === 'editor' ? 'Editor' : 'Viewer'}
+                                </span>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : shareLink ? (
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold' }}>Share Link:</label>
+                    <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
+                      <input
+                        type="text"
+                        value={shareLink}
+                        readOnly
+                        style={{
+                          flex: 1,
+                          padding: '8px',
+                          border: '1px solid #ddd',
+                          borderRadius: '4px',
+                          fontSize: '14px'
+                        }}
+                      />
+                      <button
+                        onClick={copyShareLink}
+                        style={{
+                          padding: '8px 16px',
+                          background: '#3b82f6',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '4px',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px'
+                        }}
+                      >
+                        <Copy size={16} />
+                        Copy
+                      </button>
+                    </div>
+                    <button
+                      onClick={revokeShareLink}
+                      style={{
+                        padding: '8px 16px',
+                        background: '#ef4444',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '4px',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      Revoke Link
+                    </button>
+                    
+                    {/* Show shared users list */}
+                    {sharedUsers.length > 0 && (
+                      <div style={{ marginTop: '24px', paddingTop: '20px', borderTop: '1px solid #e5e7eb' }}>
+                        <label style={{ display: 'block', marginBottom: '12px', fontWeight: 'bold' }}>Shared Users:</label>
+                        <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
+                          {sharedUsers.map((perm, index) => (
+                            <div key={index} style={{
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              alignItems: 'center',
+                              padding: '8px 12px',
+                              marginBottom: '8px',
+                              background: '#f3f4f6',
+                              borderRadius: '6px'
+                            }}>
+                              <span style={{ fontWeight: '500', color: '#1f2937' }}>{perm.username}</span>
+                              {userRole === 'owner' ? (
+                                <select
+                                  value={perm.role}
+                                  onChange={async (e) => {
+                                    const newRole = e.target.value;
+                                    try {
+                                      const response = await fetch(`${API_BASE_URL}/api/documents/${documentId}/permissions`, {
+                                        method: 'POST',
+                                        headers: {
+                                          'Content-Type': 'application/json',
+                                          'x-username': currentUser
+                                        },
+                                        body: JSON.stringify({ username: perm.username, role: newRole })
+                                      });
+                                      if (response.ok) {
+                                        // Refresh shared users list
+                                        const refreshResponse = await fetch(`${API_BASE_URL}/api/documents/${documentId}`, {
+                                          headers: { 'x-username': currentUser }
+                                        });
+                                        if (refreshResponse.ok) {
+                                          const refreshedDoc = await refreshResponse.json();
+                                          setSharedUsers(refreshedDoc.permissions || []);
+                                        }
+                                      } else {
+                                        const error = await response.json();
+                                        throw new Error(error.error || 'Failed to update access');
+                                      }
+                                    } catch (error) {
+                                      console.error('Error updating user access:', error);
+                                      alert('Failed to update user access: ' + error.message);
+                                    }
+                                  }}
+                                  style={{
+                                    padding: '4px 8px',
+                                    borderRadius: '4px',
+                                    fontSize: '12px',
+                                    fontWeight: '600',
+                                    background: perm.role === 'editor' ? '#3b82f6' : '#6b7280',
+                                    color: 'white',
+                                    border: 'none',
+                                    cursor: 'pointer'
+                                  }}
+                                >
+                                  <option value="editor">Editor</option>
+                                  <option value="viewer">Viewer</option>
+                                </select>
+                              ) : (
+                                <span style={{
+                                  padding: '4px 8px',
+                                  borderRadius: '4px',
+                                  fontSize: '12px',
+                                  fontWeight: '600',
+                                  background: perm.role === 'editor' ? '#3b82f6' : '#6b7280',
+                                  color: 'white'
+                                }}>
+                                  {perm.role === 'editor' ? 'Editor' : 'Viewer'}
+                                </span>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <button
+                    onClick={generateShareLink}
+                    style={{
+                      padding: '10px 20px',
+                      background: '#3b82f6',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                      fontSize: '16px',
+                      fontWeight: 'bold'
+                    }}
+                  >
+                    Generate Share Link
+                  </button>
+                )}
               </div>
             </div>
           </div>
