@@ -4,7 +4,8 @@ const Document = require('../../models/Document');
 const crdtService = require('../../services/crdtService');
 
 beforeAll(async () => {
-  const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/collaborative-editor-test';
+  const MONGODB_URI =
+    process.env.MONGODB_URI || 'mongodb://localhost:27017/collaborative-editor-test';
   await mongoose.connect(MONGODB_URI);
 });
 
@@ -25,7 +26,7 @@ describe('DocumentService - Share Links', () => {
     test('should generate share link with edit access', async () => {
       const doc = await Document.create({
         title: 'Test Doc',
-        owner: testOwner
+        owner: testOwner,
       });
 
       const token = await documentService.generateShareLink(doc._id.toString(), 'edit', testOwner);
@@ -42,10 +43,10 @@ describe('DocumentService - Share Links', () => {
     test('should generate share link with read access', async () => {
       const doc = await Document.create({
         title: 'Test Doc',
-        owner: testOwner
+        owner: testOwner,
       });
 
-      const token = await documentService.generateShareLink(doc._id.toString(), 'read', testOwner);
+      const _token = await documentService.generateShareLink(doc._id.toString(), 'read', testOwner);
 
       const updated = await Document.findById(doc._id);
       expect(updated.shareAccess).toBe('read');
@@ -53,16 +54,16 @@ describe('DocumentService - Share Links', () => {
 
     test('should throw error if document not found', async () => {
       const fakeId = new mongoose.Types.ObjectId().toString();
-      
-      await expect(
-        documentService.generateShareLink(fakeId, 'edit', testOwner)
-      ).rejects.toThrow('Document not found');
+
+      await expect(documentService.generateShareLink(fakeId, 'edit', testOwner)).rejects.toThrow(
+        'Document not found'
+      );
     });
 
     test('should throw error if not owner', async () => {
       const doc = await Document.create({
         title: 'Test Doc',
-        owner: 'owner1'
+        owner: 'owner1',
       });
 
       await expect(
@@ -77,7 +78,7 @@ describe('DocumentService - Share Links', () => {
         title: 'Shared Doc',
         owner: testOwner,
         shareToken: 'test-token-123',
-        shareAccess: 'edit'
+        shareAccess: 'edit',
       });
 
       const found = await documentService.getDocumentByShareToken('test-token-123');
@@ -99,7 +100,7 @@ describe('DocumentService - Share Links', () => {
         title: 'Shared Doc',
         owner: 'owner1',
         shareToken: 'test-token-edit',
-        shareAccess: 'edit'
+        shareAccess: 'edit',
       });
 
       const result = await documentService.joinDocumentByShareToken('test-token-edit', 'newuser');
@@ -108,7 +109,7 @@ describe('DocumentService - Share Links', () => {
       expect(result.access).toBe('edit');
 
       const updated = await Document.findById(doc._id);
-      const permission = updated.permissions.find(p => p.username === 'newuser');
+      const permission = updated.permissions.find((p) => p.username === 'newuser');
       expect(permission).toBeDefined();
       expect(permission.role).toBe('editor');
     });
@@ -118,7 +119,7 @@ describe('DocumentService - Share Links', () => {
         title: 'Shared Doc',
         owner: 'owner1',
         shareToken: 'test-token-read',
-        shareAccess: 'read'
+        shareAccess: 'read',
       });
 
       const result = await documentService.joinDocumentByShareToken('test-token-read', 'newuser');
@@ -126,7 +127,7 @@ describe('DocumentService - Share Links', () => {
       expect(result.access).toBe('read');
 
       const updated = await Document.findById(doc._id);
-      const permission = updated.permissions.find(p => p.username === 'newuser');
+      const permission = updated.permissions.find((p) => p.username === 'newuser');
       expect(permission).toBeDefined();
       expect(permission.role).toBe('viewer');
     });
@@ -137,13 +138,13 @@ describe('DocumentService - Share Links', () => {
         owner: 'owner1',
         shareToken: 'test-token-edit',
         shareAccess: 'edit',
-        permissions: [{ username: 'existinguser', role: 'editor' }]
+        permissions: [{ username: 'existinguser', role: 'editor' }],
       });
 
       await documentService.joinDocumentByShareToken('test-token-edit', 'existinguser');
 
       const updated = await Document.findById(doc._id);
-      const permissions = updated.permissions.filter(p => p.username === 'existinguser');
+      const permissions = updated.permissions.filter((p) => p.username === 'existinguser');
       expect(permissions.length).toBe(1);
     });
 
@@ -160,7 +161,7 @@ describe('DocumentService - Share Links', () => {
         title: 'Test Doc',
         owner: testOwner,
         shareToken: 'test-token',
-        shareAccess: 'edit'
+        shareAccess: 'edit',
       });
 
       const result = await documentService.revokeShareLink(doc._id.toString(), testOwner);
@@ -174,10 +175,10 @@ describe('DocumentService - Share Links', () => {
 
     test('should throw error if document not found', async () => {
       const fakeId = new mongoose.Types.ObjectId().toString();
-      
-      await expect(
-        documentService.revokeShareLink(fakeId, testOwner)
-      ).rejects.toThrow('Document not found');
+
+      await expect(documentService.revokeShareLink(fakeId, testOwner)).rejects.toThrow(
+        'Document not found'
+      );
     });
 
     test('should throw error if not owner', async () => {
@@ -185,12 +186,12 @@ describe('DocumentService - Share Links', () => {
         title: 'Test Doc',
         owner: 'owner1',
         shareToken: 'test-token',
-        shareAccess: 'edit'
+        shareAccess: 'edit',
       });
 
-      await expect(
-        documentService.revokeShareLink(doc._id.toString(), 'notowner')
-      ).rejects.toThrow('Only document owner can revoke share links');
+      await expect(documentService.revokeShareLink(doc._id.toString(), 'notowner')).rejects.toThrow(
+        'Only document owner can revoke share links'
+      );
     });
   });
 
@@ -199,7 +200,7 @@ describe('DocumentService - Share Links', () => {
       const doc = await Document.create({
         title: 'Test Doc',
         content: 'Test Content',
-        owner: testOwner
+        owner: testOwner,
       });
 
       await documentService.loadDocumentIntoCRDT(doc._id.toString());
@@ -211,12 +212,9 @@ describe('DocumentService - Share Links', () => {
 
     test('should handle non-existent document gracefully', async () => {
       const fakeId = new mongoose.Types.ObjectId().toString();
-      
+
       // Should not throw error
-      await expect(
-        documentService.loadDocumentIntoCRDT(fakeId)
-      ).resolves.not.toThrow();
+      await expect(documentService.loadDocumentIntoCRDT(fakeId)).resolves.not.toThrow();
     });
   });
 });
-

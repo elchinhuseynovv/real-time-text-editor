@@ -20,4 +20,3 @@ router.post('/:id/share', documentController.generateShareLink.bind(documentCont
 router.delete('/:id/share', documentController.revokeShareLink.bind(documentController));
 
 module.exports = router;
-

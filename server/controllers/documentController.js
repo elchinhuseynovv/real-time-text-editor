@@ -13,16 +13,16 @@ class DocumentController {
     try {
       const { owner, limit = 100, skip = 0 } = req.query;
       const username = req.user?.username || req.headers['x-username'] || null;
-      
+
       // If username is provided, filter by username (documents user owns OR has access to)
       // Otherwise, if owner is provided, filter by owner
       // If neither, return empty array (don't show all documents)
-      const filterOptions = username 
+      const filterOptions = username
         ? { username, limit: parseInt(limit), skip: parseInt(skip) }
-        : owner 
+        : owner
           ? { owner, limit: parseInt(limit), skip: parseInt(skip) }
           : { limit: parseInt(limit), skip: parseInt(skip) };
-      
+
       const documents = await documentService.getDocuments(filterOptions);
       res.json(documents);
     } catch (error) {
@@ -73,7 +73,7 @@ class DocumentController {
       const document = await documentService.createDocument({
         title,
         content: content || '',
-        owner: username
+        owner: username,
       });
 
       res.status(201).json(document);
@@ -184,7 +184,10 @@ class DocumentController {
       res.json({ message: 'Permission removed successfully' });
     } catch (error) {
       console.error('Error removing permission:', error);
-      if (error.message === 'Insufficient permissions' || error.message === 'Cannot remove owner permission') {
+      if (
+        error.message === 'Insufficient permissions' ||
+        error.message === 'Cannot remove owner permission'
+      ) {
         return res.status(403).json({ error: error.message });
       }
       res.status(500).json({ error: 'Failed to remove permission' });
@@ -206,11 +209,11 @@ class DocumentController {
 
       const token = await documentService.generateShareLink(id, access, requesterUsername);
       const shareUrl = `${process.env.CLIENT_URL || 'http://localhost:5173'}/share/${token}`;
-      
-      res.json({ 
+
+      res.json({
         token,
         shareUrl,
-        access
+        access,
       });
     } catch (error) {
       console.error('Error generating share link:', error);
@@ -237,11 +240,11 @@ class DocumentController {
       }
 
       const { document, access } = await documentService.joinDocumentByShareToken(token, username);
-      
+
       res.json({
         documentId: document._id.toString(),
         title: document.title,
-        access
+        access,
       });
     } catch (error) {
       console.error('Error joining document by share token:', error);
@@ -276,4 +279,3 @@ class DocumentController {
 }
 
 module.exports = new DocumentController();
-

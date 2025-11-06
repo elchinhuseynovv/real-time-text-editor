@@ -8,7 +8,8 @@ const app = require('../../server');
 const Document = require('../../models/Document');
 
 beforeAll(async () => {
-  const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/collaborative-editor-test';
+  const MONGODB_URI =
+    process.env.MONGODB_URI || 'mongodb://localhost:27017/collaborative-editor-test';
   await mongoose.connect(MONGODB_URI);
 });
 
@@ -27,12 +28,10 @@ describe('Document API Routes', () => {
     test('should get all documents', async () => {
       await Document.create([
         { title: 'Doc1', content: 'Content1', owner: testUser },
-        { title: 'Doc2', content: 'Content2', owner: testUser }
+        { title: 'Doc2', content: 'Content2', owner: testUser },
       ]);
 
-      const response = await request(app)
-        .get('/api/documents')
-        .set('x-username', testUser);
+      const response = await request(app).get('/api/documents').set('x-username', testUser);
 
       expect(response.status).toBe(200);
       expect(Array.isArray(response.body)).toBe(true);
@@ -42,7 +41,7 @@ describe('Document API Routes', () => {
     test('should filter by owner', async () => {
       await Document.create([
         { title: 'Doc1', owner: 'user1' },
-        { title: 'Doc2', owner: 'user2' }
+        { title: 'Doc2', owner: 'user2' },
       ]);
 
       const response = await request(app)
@@ -50,7 +49,7 @@ describe('Document API Routes', () => {
         .set('x-username', testUser);
 
       expect(response.status).toBe(200);
-      response.body.forEach(doc => {
+      response.body.forEach((doc) => {
         expect(doc.owner).toBe('user1');
       });
     });
@@ -61,7 +60,7 @@ describe('Document API Routes', () => {
       const doc = await Document.create({
         title: 'Test Doc',
         content: 'Test Content',
-        owner: testUser
+        owner: testUser,
       });
 
       const response = await request(app)
@@ -87,7 +86,7 @@ describe('Document API Routes', () => {
         title: 'Private Doc',
         content: 'Private',
         owner: 'owner1',
-        permissions: []
+        permissions: [],
       });
 
       const response = await request(app)
@@ -100,13 +99,10 @@ describe('Document API Routes', () => {
 
   describe('POST /api/documents', () => {
     test('should create new document', async () => {
-      const response = await request(app)
-        .post('/api/documents')
-        .set('x-username', testUser)
-        .send({
-          title: 'New Document',
-          content: 'New Content'
-        });
+      const response = await request(app).post('/api/documents').set('x-username', testUser).send({
+        title: 'New Document',
+        content: 'New Content',
+      });
 
       expect(response.status).toBe(201);
       expect(response.body.title).toBe('New Document');
@@ -115,11 +111,9 @@ describe('Document API Routes', () => {
     });
 
     test('should require username', async () => {
-      const response = await request(app)
-        .post('/api/documents')
-        .send({
-          title: 'New Document'
-        });
+      const response = await request(app).post('/api/documents').send({
+        title: 'New Document',
+      });
 
       expect(response.status).toBe(400);
     });
@@ -130,14 +124,14 @@ describe('Document API Routes', () => {
       const doc = await Document.create({
         title: 'Test',
         content: 'Old',
-        owner: testUser
+        owner: testUser,
       });
 
       const response = await request(app)
         .put(`/api/documents/${doc._id}`)
         .set('x-username', testUser)
         .send({
-          content: 'New Content'
+          content: 'New Content',
         });
 
       expect(response.status).toBe(200);
@@ -147,14 +141,14 @@ describe('Document API Routes', () => {
     test('should update document title', async () => {
       const doc = await Document.create({
         title: 'Old Title',
-        owner: testUser
+        owner: testUser,
       });
 
       const response = await request(app)
         .put(`/api/documents/${doc._id}`)
         .set('x-username', testUser)
         .send({
-          title: 'New Title'
+          title: 'New Title',
         });
 
       expect(response.status).toBe(200);
@@ -166,14 +160,14 @@ describe('Document API Routes', () => {
         title: 'Protected',
         content: 'Content',
         owner: 'owner1',
-        permissions: [{ username: 'viewer1', role: 'viewer' }]
+        permissions: [{ username: 'viewer1', role: 'viewer' }],
       });
 
       const response = await request(app)
         .put(`/api/documents/${doc._id}`)
         .set('x-username', 'viewer1')
         .send({
-          content: 'Changed'
+          content: 'Changed',
         });
 
       expect(response.status).toBe(403);
@@ -184,7 +178,7 @@ describe('Document API Routes', () => {
     test('should delete document', async () => {
       const doc = await Document.create({
         title: 'To Delete',
-        owner: testUser
+        owner: testUser,
       });
 
       const response = await request(app)
@@ -202,7 +196,7 @@ describe('Document API Routes', () => {
       const doc = await Document.create({
         title: 'Protected',
         owner: 'owner1',
-        permissions: [{ username: 'editor1', role: 'editor' }]
+        permissions: [{ username: 'editor1', role: 'editor' }],
       });
 
       const response = await request(app)
@@ -217,7 +211,7 @@ describe('Document API Routes', () => {
     test('should add permission', async () => {
       const doc = await Document.create({
         title: 'Test',
-        owner: testUser
+        owner: testUser,
       });
 
       const response = await request(app)
@@ -225,13 +219,13 @@ describe('Document API Routes', () => {
         .set('x-username', testUser)
         .send({
           username: 'newuser',
-          role: 'editor'
+          role: 'editor',
         });
 
       expect(response.status).toBe(200);
 
       const updated = await Document.findById(doc._id);
-      const permission = updated.permissions.find(p => p.username === 'newuser');
+      const permission = updated.permissions.find((p) => p.username === 'newuser');
       expect(permission).toBeDefined();
       expect(permission.role).toBe('editor');
     });
@@ -240,7 +234,7 @@ describe('Document API Routes', () => {
       const doc = await Document.create({
         title: 'Test',
         owner: 'owner1',
-        permissions: [{ username: 'editor1', role: 'editor' }]
+        permissions: [{ username: 'editor1', role: 'editor' }],
       });
 
       const response = await request(app)
@@ -248,7 +242,7 @@ describe('Document API Routes', () => {
         .set('x-username', 'editor1')
         .send({
           username: 'newuser',
-          role: 'editor'
+          role: 'editor',
         });
 
       expect(response.status).toBe(403);
@@ -260,27 +254,27 @@ describe('Document API Routes', () => {
       const doc = await Document.create({
         title: 'Test',
         owner: testUser,
-        permissions: [{ username: 'editor1', role: 'editor' }]
+        permissions: [{ username: 'editor1', role: 'editor' }],
       });
 
       const response = await request(app)
         .delete(`/api/documents/${doc._id}/permissions`)
         .set('x-username', testUser)
         .send({
-          username: 'editor1'
+          username: 'editor1',
         });
 
       expect(response.status).toBe(200);
 
       const updated = await Document.findById(doc._id);
-      const permission = updated.permissions.find(p => p.username === 'editor1');
+      const permission = updated.permissions.find((p) => p.username === 'editor1');
       expect(permission).toBeUndefined();
     });
 
     test('should require username in body', async () => {
       const doc = await Document.create({
         title: 'Test',
-        owner: testUser
+        owner: testUser,
       });
 
       const response = await request(app)
@@ -296,7 +290,7 @@ describe('Document API Routes', () => {
     test('should generate share link with edit access', async () => {
       const doc = await Document.create({
         title: 'Test Doc',
-        owner: testUser
+        owner: testUser,
       });
 
       const response = await request(app)
@@ -317,7 +311,7 @@ describe('Document API Routes', () => {
     test('should generate share link with read access', async () => {
       const doc = await Document.create({
         title: 'Test Doc',
-        owner: testUser
+        owner: testUser,
       });
 
       const response = await request(app)
@@ -332,7 +326,7 @@ describe('Document API Routes', () => {
     test('should require owner to generate share link', async () => {
       const doc = await Document.create({
         title: 'Test Doc',
-        owner: 'owner1'
+        owner: 'owner1',
       });
 
       const response = await request(app)
@@ -346,7 +340,7 @@ describe('Document API Routes', () => {
     test('should require valid access level', async () => {
       const doc = await Document.create({
         title: 'Test Doc',
-        owner: testUser
+        owner: testUser,
       });
 
       const response = await request(app)
@@ -374,7 +368,7 @@ describe('Document API Routes', () => {
         title: 'Shared Doc',
         owner: 'owner1',
         shareToken: 'test-token-123',
-        shareAccess: 'edit'
+        shareAccess: 'edit',
       });
 
       const response = await request(app)
@@ -386,7 +380,7 @@ describe('Document API Routes', () => {
       expect(response.body.access).toBe('edit');
 
       const updated = await Document.findById(doc._id);
-      const permission = updated.permissions.find(p => p.username === 'newuser');
+      const permission = updated.permissions.find((p) => p.username === 'newuser');
       expect(permission).toBeDefined();
       expect(permission.role).toBe('editor');
     });
@@ -396,7 +390,7 @@ describe('Document API Routes', () => {
         title: 'Shared Doc',
         owner: 'owner1',
         shareToken: 'test-token-read',
-        shareAccess: 'read'
+        shareAccess: 'read',
       });
 
       const response = await request(app)
@@ -407,14 +401,13 @@ describe('Document API Routes', () => {
       expect(response.body.access).toBe('read');
 
       const updated = await Document.findById(doc._id);
-      const permission = updated.permissions.find(p => p.username === 'newuser');
+      const permission = updated.permissions.find((p) => p.username === 'newuser');
       expect(permission).toBeDefined();
       expect(permission.role).toBe('viewer');
     });
 
     test('should require username', async () => {
-      const response = await request(app)
-        .get('/api/documents/share/test-token-123');
+      const response = await request(app).get('/api/documents/share/test-token-123');
 
       expect(response.status).toBe(400);
     });
@@ -434,7 +427,7 @@ describe('Document API Routes', () => {
         title: 'Test Doc',
         owner: testUser,
         shareToken: 'test-token',
-        shareAccess: 'edit'
+        shareAccess: 'edit',
       });
 
       const response = await request(app)
@@ -453,7 +446,7 @@ describe('Document API Routes', () => {
         title: 'Test Doc',
         owner: 'owner1',
         shareToken: 'test-token',
-        shareAccess: 'edit'
+        shareAccess: 'edit',
       });
 
       const response = await request(app)
@@ -486,18 +479,17 @@ describe('Document API Routes', () => {
     test('should handle missing username in POST permissions', async () => {
       const doc = await Document.create({
         title: 'Test',
-        owner: testUser
+        owner: testUser,
       });
 
       const response = await request(app)
         .post(`/api/documents/${doc._id}/permissions`)
         .set('x-username', testUser)
         .send({
-          role: 'editor'
+          role: 'editor',
         });
 
       expect(response.status).toBe(400);
     });
   });
 });
-

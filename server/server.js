@@ -16,17 +16,17 @@ const io = new Server(server, {
   cors: {
     origin: process.env.CLIENT_URL || process.env.CORS_ORIGIN || '*',
     methods: ['GET', 'POST'],
-    credentials: true
+    credentials: true,
   },
   transports: ['websocket', 'polling'], // Support both transports
   pingTimeout: 60000,
-  pingInterval: 25000
+  pingInterval: 25000,
 });
 
 // Middleware
 const corsOptions = {
   origin: process.env.CLIENT_URL || process.env.CORS_ORIGIN || '*',
-  credentials: true
+  credentials: true,
 };
 app.use(cors(corsOptions));
 app.use(express.json());
@@ -47,7 +47,7 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     ...stats,
-    mongodb: require('mongoose').connection.readyState === 1 ? 'connected' : 'disconnected'
+    mongodb: require('mongoose').connection.readyState === 1 ? 'connected' : 'disconnected',
   });
 });
 

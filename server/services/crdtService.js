@@ -19,7 +19,7 @@ class CRDTService {
     if (!this.documentStates.has(documentId)) {
       this.documentStates.set(documentId, {
         characters: this._stringToCRDT(initialContent),
-        version: 0
+        version: 0,
       });
     }
   }
@@ -33,7 +33,7 @@ class CRDTService {
     return text.split('').map((char, index) => ({
       id: this._generateCharId(index),
       char: char,
-      position: index
+      position: index,
     }));
   }
 
@@ -45,7 +45,7 @@ class CRDTService {
   _crdtToString(crdtChars) {
     return crdtChars
       .sort((a, b) => a.position - b.position)
-      .map(c => c.char)
+      .map((c) => c.char)
       .join('');
   }
 
@@ -83,27 +83,27 @@ class CRDTService {
       const newChars = text.split('').map((char, index) => ({
         id: this._generateCharId(position + index, clientId),
         char: char,
-        position: position + index
+        position: position + index,
       }));
 
       // Adjust positions of existing characters after insertion point
-      characters = characters.map(c => ({
+      characters = characters.map((c) => ({
         ...c,
-        position: c.position >= position ? c.position + text.length : c.position
+        position: c.position >= position ? c.position + text.length : c.position,
       }));
 
       // Insert new characters
       characters.push(...newChars);
     } else if (operation === 'delete') {
       // Delete characters at position
-      characters = characters.filter(c => 
-        c.position < position || c.position >= position + text.length
+      characters = characters.filter(
+        (c) => c.position < position || c.position >= position + text.length
       );
 
       // Adjust positions of remaining characters
-      characters = characters.map(c => ({
+      characters = characters.map((c) => ({
         ...c,
-        position: c.position >= position ? c.position - text.length : c.position
+        position: c.position >= position ? c.position - text.length : c.position,
       }));
     }
 
@@ -115,7 +115,7 @@ class CRDTService {
     const newContent = this._crdtToString(characters);
     return {
       content: newContent,
-      version: state.version
+      version: state.version,
     };
   }
 
@@ -131,23 +131,17 @@ class CRDTService {
       this.initializeDocument(documentId);
     }
 
-    const state = this.documentStates.get(documentId);
-    
     // Sort operations by timestamp/client ID for deterministic merging
     operations.sort((a, b) => {
-      if (a.timestamp !== b.timestamp) return a.timestamp - b.timestamp;
+      if (a.timestamp !== b.timestamp) {
+        return a.timestamp - b.timestamp;
+      }
       return a.clientId.localeCompare(b.clientId);
     });
 
     // Apply operations in order
-    operations.forEach(op => {
-      this.applyOperation(
-        documentId,
-        op.operation,
-        op.position,
-        op.text,
-        op.clientId
-      );
+    operations.forEach((op) => {
+      this.applyOperation(documentId, op.operation, op.position, op.text, op.clientId);
     });
 
     const state_after = this.documentStates.get(documentId);
@@ -176,7 +170,7 @@ class CRDTService {
     // Always update/reinitialize the document state
     this.documentStates.set(documentId, {
       characters: this._stringToCRDT(content || ''),
-      version: (this.documentStates.get(documentId)?.version || 0) + 1
+      version: (this.documentStates.get(documentId)?.version || 0) + 1,
     });
   }
 
@@ -190,4 +184,3 @@ class CRDTService {
 }
 
 module.exports = new CRDTService();
-

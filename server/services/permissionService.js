@@ -26,9 +26,7 @@ class PermissionService {
       }
 
       // Find user's permission entry
-      const userPermission = document.permissions.find(
-        p => p.username === username
-      );
+      const userPermission = document.permissions.find((p) => p.username === username);
 
       if (!userPermission) {
         // No explicit permission, check if user is owner
@@ -72,9 +70,7 @@ class PermissionService {
         return 'owner';
       }
 
-      const userPermission = document.permissions.find(
-        p => p.username === username
-      );
+      const userPermission = document.permissions.find((p) => p.username === username);
 
       return userPermission ? userPermission.role : null;
     } catch (error) {
@@ -94,11 +90,7 @@ class PermissionService {
   async addPermission(documentId, username, role, requesterUsername) {
     try {
       // Check if requester has manage permission
-      const hasPermission = await this.checkPermission(
-        documentId,
-        requesterUsername,
-        'manage'
-      );
+      const hasPermission = await this.checkPermission(documentId, requesterUsername, 'manage');
 
       if (!hasPermission) {
         throw new Error('Insufficient permissions');
@@ -110,9 +102,7 @@ class PermissionService {
       }
 
       // Remove existing permission if any
-      document.permissions = document.permissions.filter(
-        p => p.username !== username
-      );
+      document.permissions = document.permissions.filter((p) => p.username !== username);
 
       // Add new permission
       document.permissions.push({ username, role });
@@ -135,11 +125,7 @@ class PermissionService {
   async removePermission(documentId, username, requesterUsername) {
     try {
       // Check if requester has manage permission
-      const hasPermission = await this.checkPermission(
-        documentId,
-        requesterUsername,
-        'manage'
-      );
+      const hasPermission = await this.checkPermission(documentId, requesterUsername, 'manage');
 
       if (!hasPermission) {
         throw new Error('Insufficient permissions');
@@ -155,9 +141,7 @@ class PermissionService {
         throw new Error('Cannot remove owner permission');
       }
 
-      document.permissions = document.permissions.filter(
-        p => p.username !== username
-      );
+      document.permissions = document.permissions.filter((p) => p.username !== username);
       await document.save();
 
       return true;
@@ -169,4 +153,3 @@ class PermissionService {
 }
 
 module.exports = new PermissionService();
-

@@ -21,15 +21,17 @@ class DocumentService {
         content,
         owner,
         permissions: [],
-        versions: [{
-          content,
-          timestamp: new Date(),
-          user: owner
-        }]
+        versions: [
+          {
+            content,
+            timestamp: new Date(),
+            user: owner,
+          },
+        ],
       });
 
       const savedDoc = await document.save();
-      
+
       // Initialize CRDT state
       crdtService.setContent(savedDoc._id.toString(), content);
 
@@ -67,25 +69,19 @@ class DocumentService {
   async getDocuments(options = {}) {
     try {
       const { owner, username, limit = 100, skip = 0 } = options;
-      
+
       let query = {};
-      
+
       if (username) {
         // Get documents where user is owner OR has permissions
         query = {
-          $or: [
-            { owner: username },
-            { 'permissions.username': username }
-          ]
+          $or: [{ owner: username }, { 'permissions.username': username }],
         };
       } else if (owner) {
         query = { owner };
       }
 
-      const documents = await Document.find(query)
-        .sort({ updatedAt: -1 })
-        .limit(limit)
-        .skip(skip);
+      const documents = await Document.find(query).sort({ updatedAt: -1 }).limit(limit).skip(skip);
 
       return documents;
     } catch (error) {
@@ -112,9 +108,9 @@ class DocumentService {
             versions: {
               content,
               timestamp: new Date(),
-              user: username || 'Anonymous'
-            }
-          }
+              user: username || 'Anonymous',
+            },
+          },
         },
         { new: true }
       );
@@ -166,7 +162,7 @@ class DocumentService {
   async deleteDocument(documentId) {
     try {
       const result = await Document.findByIdAndDelete(documentId);
-      
+
       // Clear CRDT state
       crdtService.clearDocument(documentId);
 
@@ -256,18 +252,18 @@ class DocumentService {
       }
 
       const access = document.shareAccess;
-      
+
       // Add user permission based on share access
       if (access === 'edit') {
         // Add as editor
-        const existingPermission = document.permissions.find(p => p.username === username);
+        const existingPermission = document.permissions.find((p) => p.username === username);
         if (!existingPermission) {
           document.permissions.push({ username, role: 'editor' });
           await document.save();
         }
       } else if (access === 'read') {
         // Add as viewer
-        const existingPermission = document.permissions.find(p => p.username === username);
+        const existingPermission = document.permissions.find((p) => p.username === username);
         if (!existingPermission) {
           document.permissions.push({ username, role: 'viewer' });
           await document.save();
@@ -276,7 +272,7 @@ class DocumentService {
 
       return {
         document,
-        access
+        access,
       };
     } catch (error) {
       console.error('Error joining document by share token:', error);
@@ -315,4 +311,3 @@ class DocumentService {
 }
 
 module.exports = new DocumentService();
-

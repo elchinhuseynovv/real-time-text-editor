@@ -1,6 +1,5 @@
 const request = require('supertest');
 const express = require('express');
-const mongoose = require('mongoose');
 const errorHandler = require('../../middleware/errorHandler');
 
 describe('Error Handler Middleware', () => {
@@ -9,7 +8,7 @@ describe('Error Handler Middleware', () => {
   beforeEach(() => {
     app = express();
     app.use(express.json());
-    
+
     // Test route that throws errors
     app.get('/test-validation', (req, res, next) => {
       const error = new Error('Validation failed');
@@ -78,4 +77,3 @@ describe('Error Handler Middleware', () => {
     expect(errorMessage === 'Internal server error' || errorMessage === undefined).toBe(true);
   });
 });
-

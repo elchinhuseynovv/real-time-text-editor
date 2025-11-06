@@ -6,13 +6,12 @@
 const authMiddleware = (req, res, next) => {
   // Extract username from header (in production, verify JWT token)
   const username = req.headers['x-username'];
-  
+
   if (username) {
     req.user = { username };
   }
-  
+
   next();
 };
 
 module.exports = authMiddleware;
-

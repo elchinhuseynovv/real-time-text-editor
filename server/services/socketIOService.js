@@ -20,7 +20,7 @@ class SocketIOService {
    */
   initialize(io) {
     this.io = io;
-    
+
     io.on('connection', (socket) => {
       this.handleConnection(socket);
     });
@@ -37,7 +37,7 @@ class SocketIOService {
       socket: socket,
       username: null,
       color: this.generateRandomColor(),
-      documentId: null
+      documentId: null,
     };
 
     this.clients.set(clientId, clientData);
@@ -163,14 +163,14 @@ class SocketIOService {
           this.sendToClient(client.socket, 'init', {
             document: {
               title: document.title,
-              content: crdtService.getContent(documentId)
+              content: crdtService.getContent(documentId),
             },
-            users: this.getUsersForDocument(documentId)
+            users: this.getUsersForDocument(documentId),
           });
-          
+
           // Broadcast user list update to all clients viewing this document
           this.broadcastToDocument(documentId, 'user_list_update', {
-            users: this.getUsersForDocument(documentId)
+            users: this.getUsersForDocument(documentId),
           });
         } else {
           console.warn(`⚠️ Document ${documentId} not found`);
@@ -192,7 +192,9 @@ class SocketIOService {
    */
   async handleDocumentChange(clientId, content) {
     const client = this.clients.get(clientId);
-    if (!client || !client.documentId) return;
+    if (!client || !client.documentId) {
+      return;
+    }
 
     // Check permission
     const hasPermission = await permissionService.checkPermission(
@@ -210,10 +212,15 @@ class SocketIOService {
     crdtService.setContent(client.documentId, content);
 
     // Broadcast to other clients viewing the same document
-    this.broadcastToDocument(client.documentId, 'document_update', {
-      content: content,
-      user: client.username
-    }, clientId);
+    this.broadcastToDocument(
+      client.documentId,
+      'document_update',
+      {
+        content: content,
+        user: client.username,
+      },
+      clientId
+    );
   }
 
   /**
@@ -223,7 +230,9 @@ class SocketIOService {
    */
   async handleDocumentOperation(clientId, operation) {
     const client = this.clients.get(clientId);
-    if (!client || !client.documentId) return;
+    if (!client || !client.documentId) {
+      return;
+    }
 
     // Check permission
     const hasPermission = await permissionService.checkPermission(
@@ -247,11 +256,16 @@ class SocketIOService {
     );
 
     // Broadcast operation to other clients
-    this.broadcastToDocument(client.documentId, 'document_operation', {
-      operation: operation,
-      content: result.content,
-      user: client.username
-    }, clientId);
+    this.broadcastToDocument(
+      client.documentId,
+      'document_operation',
+      {
+        operation: operation,
+        content: result.content,
+        user: client.username,
+      },
+      clientId
+    );
   }
 
   /**
@@ -261,7 +275,9 @@ class SocketIOService {
    */
   async handleTitleChange(clientId, title) {
     const client = this.clients.get(clientId);
-    if (!client || !client.documentId) return;
+    if (!client || !client.documentId) {
+      return;
+    }
 
     // Check permission (only owner/editor can change title)
     const hasPermission = await permissionService.checkPermission(
@@ -293,19 +309,26 @@ class SocketIOService {
    */
   handleChatMessage(clientId, message) {
     const client = this.clients.get(clientId);
-    if (!client || !client.documentId) return;
+    if (!client || !client.documentId) {
+      return;
+    }
 
     // Add user info to message
     const chatMessage = {
       ...message,
       user: client.username,
-      timestamp: message.timestamp || new Date().toISOString()
+      timestamp: message.timestamp || new Date().toISOString(),
     };
 
     // Broadcast to other clients viewing the same document
-    this.broadcastToDocument(client.documentId, 'chat_message', {
-      message: chatMessage
-    }, clientId);
+    this.broadcastToDocument(
+      client.documentId,
+      'chat_message',
+      {
+        message: chatMessage,
+      },
+      clientId
+    );
   }
 
   /**
@@ -336,12 +359,12 @@ class SocketIOService {
         const document = await documentService.createDocument({
           title,
           content,
-          owner: client.username
+          owner: client.username,
         });
 
         // Set document ID for client
         client.documentId = document._id.toString();
-        
+
         // Add to document clients
         if (!this.documentClients.has(client.documentId)) {
           this.documentClients.set(client.documentId, new Set());
@@ -357,7 +380,7 @@ class SocketIOService {
         // Send success with new document ID
         this.sendToClient(client.socket, 'save_success', {
           message: 'Document created and saved successfully!',
-          documentId: document._id.toString()
+          documentId: document._id.toString(),
         });
 
         // Also send init message with document state so client doesn't need to send set_document_id
@@ -367,9 +390,9 @@ class SocketIOService {
             this.sendToClient(client.socket, 'init', {
               document: {
                 title: document.title,
-                content: content
+                content: content,
               },
-              users: this.getUsersForDocument(client.documentId)
+              users: this.getUsersForDocument(client.documentId),
             });
           }
         }, 100);
@@ -405,14 +428,19 @@ class SocketIOService {
 
       this.sendToClient(client.socket, 'save_success', {
         message: 'Document saved successfully!',
-        documentId: document._id.toString()
+        documentId: document._id.toString(),
       });
 
       // Broadcast save notification to other clients
-      this.broadcastToDocument(client.documentId, 'document_saved', {
-        message: `${client.username} saved the document`,
-        timestamp: new Date().toISOString()
-      }, clientId);
+      this.broadcastToDocument(
+        client.documentId,
+        'document_saved',
+        {
+          message: `${client.username} saved the document`,
+          timestamp: new Date().toISOString(),
+        },
+        clientId
+      );
 
       console.log('✅ Document saved:', client.documentId);
     } catch (error) {
@@ -440,7 +468,7 @@ class SocketIOService {
           } else {
             // Broadcast user list update
             this.broadcastToDocument(client.documentId, 'user_list_update', {
-              users: this.getUsersForDocument(client.documentId)
+              users: this.getUsersForDocument(client.documentId),
             });
           }
         }
@@ -475,7 +503,7 @@ class SocketIOService {
   sendError(socket, errorMessage) {
     if (socket && socket.connected) {
       this.sendToClient(socket, 'error', {
-        message: errorMessage
+        message: errorMessage,
       });
     }
   }
@@ -489,11 +517,13 @@ class SocketIOService {
    */
   broadcastToDocument(documentId, type, data, excludeClientId = null) {
     const docClients = this.documentClients.get(documentId);
-    if (!docClients || !this.io) return;
+    if (!docClients || !this.io) {
+      return;
+    }
 
     // Use Socket.IO rooms for efficient broadcasting
     const room = `document:${documentId}`;
-    
+
     if (excludeClientId) {
       const excludeSocket = this.clients.get(excludeClientId)?.socket;
       if (excludeSocket && excludeSocket.connected) {
@@ -514,27 +544,22 @@ class SocketIOService {
    */
   broadcastUserList() {
     const userList = Array.from(this.clients.values())
-      .filter(c => c.username)
-      .map(c => ({
+      .filter((c) => c.username)
+      .map((c) => ({
         id: c.id,
         name: c.username,
-        color: c.color
+        color: c.color,
       }));
 
     // Remove duplicates by username
     const uniqueUsers = [];
     const seenNames = new Set();
-    userList.forEach(user => {
+    userList.forEach((user) => {
       if (!seenNames.has(user.name)) {
         seenNames.add(user.name);
         uniqueUsers.push(user);
       }
     });
-
-    const message = {
-      type: 'user_list_update',
-      data: { users: uniqueUsers }
-    };
 
     // Broadcast to all connected clients
     if (this.io) {
@@ -549,16 +574,20 @@ class SocketIOService {
    */
   getUsersForDocument(documentId) {
     const docClients = this.documentClients.get(documentId);
-    if (!docClients) return [];
+    if (!docClients) {
+      return [];
+    }
 
     return Array.from(docClients)
-      .map(clientId => {
+      .map((clientId) => {
         const client = this.clients.get(clientId);
-        return client && client.username ? {
-          id: client.id,
-          name: client.username,
-          color: client.color
-        } : null;
+        return client && client.username
+          ? {
+              id: client.id,
+              name: client.username,
+              color: client.color,
+            }
+          : null;
       })
       .filter(Boolean);
   }
@@ -577,8 +606,14 @@ class SocketIOService {
    */
   generateRandomColor() {
     const colors = [
-      '#3b82f6', '#ef4444', '#10b981', '#f59e0b',
-      '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'
+      '#3b82f6',
+      '#ef4444',
+      '#10b981',
+      '#f59e0b',
+      '#8b5cf6',
+      '#ec4899',
+      '#06b6d4',
+      '#84cc16',
     ];
     return colors[Math.floor(Math.random() * colors.length)];
   }
@@ -592,14 +627,10 @@ class SocketIOService {
       totalClients: this.clients.size,
       totalDocuments: this.documentClients.size,
       documentClients: Object.fromEntries(
-        Array.from(this.documentClients.entries()).map(([docId, clients]) => [
-          docId,
-          clients.size
-        ])
-      )
+        Array.from(this.documentClients.entries()).map(([docId, clients]) => [docId, clients.size])
+      ),
     };
   }
 }
 
 module.exports = new SocketIOService();
-

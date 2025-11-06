@@ -4,7 +4,8 @@ const Document = require('../../models/Document');
 
 // Connect to test database
 beforeAll(async () => {
-  const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/collaborative-editor-test';
+  const MONGODB_URI =
+    process.env.MONGODB_URI || 'mongodb://localhost:27017/collaborative-editor-test';
   await mongoose.connect(MONGODB_URI);
 });
 
@@ -26,8 +27,8 @@ describe('PermissionService', () => {
       owner: 'owner1',
       permissions: [
         { username: 'editor1', role: 'editor' },
-        { username: 'viewer1', role: 'viewer' }
-      ]
+        { username: 'viewer1', role: 'viewer' },
+      ],
     });
     const saved = await doc.save();
     documentId = saved._id.toString();
@@ -56,13 +57,19 @@ describe('PermissionService', () => {
     });
 
     test('user without permission should not have access', async () => {
-      expect(await permissionService.checkPermission(documentId, 'unauthorized', 'read')).toBe(false);
-      expect(await permissionService.checkPermission(documentId, 'unauthorized', 'write')).toBe(false);
+      expect(await permissionService.checkPermission(documentId, 'unauthorized', 'read')).toBe(
+        false
+      );
+      expect(await permissionService.checkPermission(documentId, 'unauthorized', 'write')).toBe(
+        false
+      );
     });
 
     test('should return false for non-existent document', async () => {
       const fakeId = new mongoose.Types.ObjectId();
-      expect(await permissionService.checkPermission(fakeId.toString(), 'owner1', 'read')).toBe(false);
+      expect(await permissionService.checkPermission(fakeId.toString(), 'owner1', 'read')).toBe(
+        false
+      );
     });
   });
 
@@ -91,9 +98,9 @@ describe('PermissionService', () => {
   describe('addPermission', () => {
     test('owner should be able to add permission', async () => {
       await permissionService.addPermission(documentId, 'newuser', 'editor', 'owner1');
-      
+
       const doc = await Document.findById(documentId);
-      const permission = doc.permissions.find(p => p.username === 'newuser');
+      const permission = doc.permissions.find((p) => p.username === 'newuser');
       expect(permission).toBeDefined();
       expect(permission.role).toBe('editor');
     });
@@ -106,9 +113,9 @@ describe('PermissionService', () => {
 
     test('should replace existing permission', async () => {
       await permissionService.addPermission(documentId, 'viewer1', 'editor', 'owner1');
-      
+
       const doc = await Document.findById(documentId);
-      const permissions = doc.permissions.filter(p => p.username === 'viewer1');
+      const permissions = doc.permissions.filter((p) => p.username === 'viewer1');
       expect(permissions.length).toBe(1);
       expect(permissions[0].role).toBe('editor');
     });
@@ -117,9 +124,9 @@ describe('PermissionService', () => {
   describe('removePermission', () => {
     test('owner should be able to remove permission', async () => {
       await permissionService.removePermission(documentId, 'viewer1', 'owner1');
-      
+
       const doc = await Document.findById(documentId);
-      const permission = doc.permissions.find(p => p.username === 'viewer1');
+      const permission = doc.permissions.find((p) => p.username === 'viewer1');
       expect(permission).toBeUndefined();
     });
 
@@ -136,4 +143,3 @@ describe('PermissionService', () => {
     });
   });
 });
-

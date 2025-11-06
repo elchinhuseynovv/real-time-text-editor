@@ -34,7 +34,7 @@ class WebSocketService {
       ws: ws,
       username: null,
       color: this.generateRandomColor(),
-      documentId: null
+      documentId: null,
     };
 
     this.clients.set(clientId, clientData);
@@ -172,18 +172,18 @@ class WebSocketService {
             data: {
               document: {
                 title: document.title,
-                content: crdtService.getContent(documentId)
+                content: crdtService.getContent(documentId),
               },
-              users: this.getUsersForDocument(documentId)
-            }
+              users: this.getUsersForDocument(documentId),
+            },
           });
-          
+
           // Broadcast user list update to all clients viewing this document
           this.broadcastToDocument(documentId, {
             type: 'user_list_update',
             data: {
-              users: this.getUsersForDocument(documentId)
-            }
+              users: this.getUsersForDocument(documentId),
+            },
           });
         } else {
           console.warn(`⚠️ Document ${documentId} not found`);
@@ -223,13 +223,17 @@ class WebSocketService {
     crdtService.setContent(client.documentId, content);
 
     // Broadcast to other clients viewing the same document
-    this.broadcastToDocument(client.documentId, {
-      type: 'document_update',
-      data: {
-        content: content,
-        user: client.username
-      }
-    }, clientId);
+    this.broadcastToDocument(
+      client.documentId,
+      {
+        type: 'document_update',
+        data: {
+          content: content,
+          user: client.username,
+        },
+      },
+      clientId
+    );
   }
 
   /**
@@ -263,14 +267,18 @@ class WebSocketService {
     );
 
     // Broadcast operation to other clients
-    this.broadcastToDocument(client.documentId, {
-      type: 'document_operation',
-      data: {
-        operation: operation,
-        content: result.content,
-        user: client.username
-      }
-    }, clientId);
+    this.broadcastToDocument(
+      client.documentId,
+      {
+        type: 'document_operation',
+        data: {
+          operation: operation,
+          content: result.content,
+          user: client.username,
+        },
+      },
+      clientId
+    );
   }
 
   /**
@@ -298,10 +306,14 @@ class WebSocketService {
       await documentService.updateDocumentTitle(client.documentId, title);
 
       // Broadcast to other clients
-      this.broadcastToDocument(client.documentId, {
-        type: 'title_update',
-        data: { title }
-      }, clientId);
+      this.broadcastToDocument(
+        client.documentId,
+        {
+          type: 'title_update',
+          data: { title },
+        },
+        clientId
+      );
     } catch (error) {
       console.error('Error updating title:', error);
       this.sendError(client.ws, 'Failed to update title');
@@ -321,16 +333,20 @@ class WebSocketService {
       id: message.id || Date.now(),
       text: message.text,
       user: client.username || 'Anonymous',
-      timestamp: new Date().toLocaleTimeString()
+      timestamp: new Date().toLocaleTimeString(),
     };
 
     console.log('💬 Chat message from', chatMessage.user, ':', chatMessage.text);
 
     // Broadcast to all clients viewing the same document
-    this.broadcastToDocument(client.documentId, {
-      type: 'chat_message',
-      data: { message: chatMessage }
-    }, null);
+    this.broadcastToDocument(
+      client.documentId,
+      {
+        type: 'chat_message',
+        data: { message: chatMessage },
+      },
+      null
+    );
   }
 
   /**
@@ -361,12 +377,12 @@ class WebSocketService {
         const document = await documentService.createDocument({
           title,
           content,
-          owner: client.username
+          owner: client.username,
         });
 
         // Set document ID for client
         client.documentId = document._id.toString();
-        
+
         // Add to document clients
         if (!this.documentClients.has(client.documentId)) {
           this.documentClients.set(client.documentId, new Set());
@@ -381,8 +397,8 @@ class WebSocketService {
           type: 'save_success',
           data: {
             message: 'Document created and saved successfully!',
-            documentId: document._id.toString()
-          }
+            documentId: document._id.toString(),
+          },
         });
 
         // Also send init message with document state so client doesn't need to send set_document_id
@@ -394,10 +410,10 @@ class WebSocketService {
               data: {
                 document: {
                   title: document.title,
-                  content: content
+                  content: content,
                 },
-                users: this.getUsersForDocument(client.documentId)
-              }
+                users: this.getUsersForDocument(client.documentId),
+              },
             });
           }
         }, 100);
@@ -435,18 +451,22 @@ class WebSocketService {
         type: 'save_success',
         data: {
           message: 'Document saved successfully!',
-          documentId: document._id.toString()
-        }
+          documentId: document._id.toString(),
+        },
       });
 
       // Broadcast save notification to other clients
-      this.broadcastToDocument(client.documentId, {
-        type: 'document_saved',
-        data: {
-          message: `${client.username} saved the document`,
-          timestamp: new Date().toISOString()
-        }
-      }, clientId);
+      this.broadcastToDocument(
+        client.documentId,
+        {
+          type: 'document_saved',
+          data: {
+            message: `${client.username} saved the document`,
+            timestamp: new Date().toISOString(),
+          },
+        },
+        clientId
+      );
 
       console.log('✅ Document saved:', client.documentId);
     } catch (error) {
@@ -492,7 +512,7 @@ class WebSocketService {
 
     const messageStr = JSON.stringify(message);
 
-    docClients.forEach(clientId => {
+    docClients.forEach((clientId) => {
       if (clientId !== excludeClientId) {
         const client = this.clients.get(clientId);
         if (client && client.ws.readyState === WebSocket.OPEN) {
@@ -507,17 +527,17 @@ class WebSocketService {
    */
   broadcastUserList() {
     const userList = Array.from(this.clients.values())
-      .filter(c => c.username)
-      .map(c => ({
+      .filter((c) => c.username)
+      .map((c) => ({
         id: c.id,
         name: c.username,
-        color: c.color
+        color: c.color,
       }));
 
     // Remove duplicates by username
     const uniqueUsers = [];
     const seenNames = new Set();
-    userList.forEach(user => {
+    userList.forEach((user) => {
       if (!seenNames.has(user.name)) {
         seenNames.add(user.name);
         uniqueUsers.push(user);
@@ -526,7 +546,7 @@ class WebSocketService {
 
     const message = {
       type: 'user_list_update',
-      data: { users: uniqueUsers }
+      data: { users: uniqueUsers },
     };
 
     // Broadcast to all connected clients
@@ -564,10 +584,12 @@ class WebSocketService {
    */
   sendError(ws, errorMessage) {
     if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({
-        type: 'error',
-        data: { message: errorMessage }
-      }));
+      ws.send(
+        JSON.stringify({
+          type: 'error',
+          data: { message: errorMessage },
+        })
+      );
     }
   }
 
@@ -581,13 +603,15 @@ class WebSocketService {
     if (!docClients) return [];
 
     return Array.from(docClients)
-      .map(clientId => {
+      .map((clientId) => {
         const client = this.clients.get(clientId);
-        return client && client.username ? {
-          id: client.id,
-          name: client.username,
-          color: client.color
-        } : null;
+        return client && client.username
+          ? {
+              id: client.id,
+              name: client.username,
+              color: client.color,
+            }
+          : null;
       })
       .filter(Boolean);
   }
@@ -606,8 +630,14 @@ class WebSocketService {
    */
   generateRandomColor() {
     const colors = [
-      '#3b82f6', '#10b981', '#f59e0b', '#ef4444',
-      '#8b5cf6', '#ec4899', '#14b8a6', '#f97316'
+      '#3b82f6',
+      '#10b981',
+      '#f59e0b',
+      '#ef4444',
+      '#8b5cf6',
+      '#ec4899',
+      '#14b8a6',
+      '#f97316',
     ];
     return colors[Math.floor(Math.random() * colors.length)];
   }
@@ -619,10 +649,9 @@ class WebSocketService {
   getStats() {
     return {
       totalClients: this.clients.size,
-      activeDocuments: this.documentClients.size
+      activeDocuments: this.documentClients.size,
     };
   }
 }
 
 module.exports = new WebSocketService();
-

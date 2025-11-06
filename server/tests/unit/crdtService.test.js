@@ -23,7 +23,7 @@ describe('CRDTService', () => {
     test('should insert text at position', () => {
       crdtService.initializeDocument('doc1', 'Hello');
       const result = crdtService.applyOperation('doc1', 'insert', 5, ' World', 'client1');
-      
+
       expect(result.content).toBe('Hello World');
       expect(result.version).toBe(1);
     });
@@ -31,21 +31,21 @@ describe('CRDTService', () => {
     test('should insert text at beginning', () => {
       crdtService.initializeDocument('doc1', 'World');
       const result = crdtService.applyOperation('doc1', 'insert', 0, 'Hello ', 'client1');
-      
+
       expect(result.content).toBe('Hello World');
     });
 
     test('should insert text in middle', () => {
       crdtService.initializeDocument('doc1', 'Helo World');
       const result = crdtService.applyOperation('doc1', 'insert', 3, 'l', 'client1');
-      
+
       expect(result.content).toBe('Hello World');
     });
 
     test('should delete text', () => {
       crdtService.initializeDocument('doc1', 'Hello World');
       const result = crdtService.applyOperation('doc1', 'delete', 5, ' World', 'client1');
-      
+
       expect(result.content).toBe('Hello');
     });
 
@@ -53,7 +53,7 @@ describe('CRDTService', () => {
       crdtService.initializeDocument('doc1', 'Hello');
       crdtService.applyOperation('doc1', 'insert', 5, ' World', 'client1');
       const result = crdtService.applyOperation('doc1', 'insert', 11, '!', 'client1');
-      
+
       expect(result.content).toBe('Hello World!');
     });
   });
@@ -74,10 +74,22 @@ describe('CRDTService', () => {
   describe('mergeOperations', () => {
     test('should merge multiple insert operations', () => {
       crdtService.initializeDocument('doc1', 'Hello');
-      
+
       const operations = [
-        { operation: 'insert', position: 5, text: ' World', clientId: 'client1', timestamp: Date.now() },
-        { operation: 'insert', position: 11, text: '!', clientId: 'client2', timestamp: Date.now() + 1 }
+        {
+          operation: 'insert',
+          position: 5,
+          text: ' World',
+          clientId: 'client1',
+          timestamp: Date.now(),
+        },
+        {
+          operation: 'insert',
+          position: 11,
+          text: '!',
+          clientId: 'client2',
+          timestamp: Date.now() + 1,
+        },
       ];
 
       const result = crdtService.mergeOperations('doc1', operations);
@@ -86,11 +98,11 @@ describe('CRDTService', () => {
 
     test('should handle concurrent edits correctly', () => {
       crdtService.initializeDocument('doc1', 'Hello');
-      
+
       // Simulate two clients inserting at same position
       const operations = [
         { operation: 'insert', position: 5, text: ' A', clientId: 'client1', timestamp: 1000 },
-        { operation: 'insert', position: 5, text: ' B', clientId: 'client2', timestamp: 1001 }
+        { operation: 'insert', position: 5, text: ' B', clientId: 'client2', timestamp: 1001 },
       ];
 
       const result = crdtService.mergeOperations('doc1', operations);
@@ -109,4 +121,3 @@ describe('CRDTService', () => {
     });
   });
 });
-

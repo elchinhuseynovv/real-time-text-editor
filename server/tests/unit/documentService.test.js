@@ -4,7 +4,8 @@ const Document = require('../../models/Document');
 const crdtService = require('../../services/crdtService');
 
 beforeAll(async () => {
-  const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/collaborative-editor-test';
+  const MONGODB_URI =
+    process.env.MONGODB_URI || 'mongodb://localhost:27017/collaborative-editor-test';
   await mongoose.connect(MONGODB_URI);
 });
 
@@ -23,7 +24,7 @@ describe('DocumentService', () => {
       const doc = await documentService.createDocument({
         title: 'Test Document',
         content: 'Test content',
-        owner: 'user1'
+        owner: 'user1',
       });
 
       expect(doc.title).toBe('Test Document');
@@ -34,7 +35,7 @@ describe('DocumentService', () => {
 
     test('should create document with default title', async () => {
       const doc = await documentService.createDocument({
-        owner: 'user1'
+        owner: 'user1',
       });
 
       expect(doc.title).toBe('Untitled Document');
@@ -45,7 +46,7 @@ describe('DocumentService', () => {
       const doc = await documentService.createDocument({
         title: 'Test',
         content: 'Hello',
-        owner: 'user1'
+        owner: 'user1',
       });
 
       expect(crdtService.getContent(doc._id.toString())).toBe('Hello');
@@ -57,7 +58,7 @@ describe('DocumentService', () => {
       const created = await documentService.createDocument({
         title: 'Test',
         content: 'Content',
-        owner: 'user1'
+        owner: 'user1',
       });
 
       const retrieved = await documentService.getDocumentById(created._id.toString());
@@ -90,7 +91,7 @@ describe('DocumentService', () => {
 
       const docs = await documentService.getDocuments({ owner: 'user1' });
       expect(docs.length).toBe(2);
-      docs.forEach(doc => {
+      docs.forEach((doc) => {
         expect(doc.owner).toBe('user1');
       });
     });
@@ -110,15 +111,11 @@ describe('DocumentService', () => {
       const doc = await documentService.createDocument({
         title: 'Test',
         content: 'Old',
-        owner: 'user1'
+        owner: 'user1',
       });
 
       const docId = doc._id.toString();
-      const updated = await documentService.updateDocumentContent(
-        docId,
-        'New content',
-        'user1'
-      );
+      const updated = await documentService.updateDocumentContent(docId, 'New content', 'user1');
 
       expect(updated.content).toBe('New content');
       expect(updated.versions.length).toBe(2);
@@ -128,15 +125,11 @@ describe('DocumentService', () => {
       const doc = await documentService.createDocument({
         title: 'Test',
         content: 'Old',
-        owner: 'user1'
+        owner: 'user1',
       });
 
       const docId = doc._id.toString();
-      await documentService.updateDocumentContent(
-        docId,
-        'New content',
-        'user1'
-      );
+      await documentService.updateDocumentContent(docId, 'New content', 'user1');
 
       expect(crdtService.getContent(docId)).toBe('New content');
     });
@@ -153,13 +146,10 @@ describe('DocumentService', () => {
     test('should update document title', async () => {
       const doc = await documentService.createDocument({
         title: 'Old Title',
-        owner: 'user1'
+        owner: 'user1',
       });
 
-      const updated = await documentService.updateDocumentTitle(
-        doc._id.toString(),
-        'New Title'
-      );
+      const updated = await documentService.updateDocumentTitle(doc._id.toString(), 'New Title');
 
       expect(updated.title).toBe('New Title');
     });
@@ -169,7 +159,7 @@ describe('DocumentService', () => {
     test('should delete document', async () => {
       const doc = await documentService.createDocument({
         title: 'Test',
-        owner: 'user1'
+        owner: 'user1',
       });
 
       const deleted = await documentService.deleteDocument(doc._id.toString());
@@ -183,7 +173,7 @@ describe('DocumentService', () => {
       const doc = await documentService.createDocument({
         title: 'Test',
         content: 'Content',
-        owner: 'user1'
+        owner: 'user1',
       });
 
       const docId = doc._id.toString();
@@ -198,7 +188,7 @@ describe('DocumentService', () => {
       const doc = await documentService.createDocument({
         title: 'Test',
         content: 'Hello World',
-        owner: 'user1'
+        owner: 'user1',
       });
 
       // Clear CRDT state first
@@ -209,4 +199,3 @@ describe('DocumentService', () => {
     });
   });
 });
-
