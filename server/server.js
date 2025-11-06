@@ -2,6 +2,8 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
+const swaggerUi = require('swagger-ui-express');
+const swaggerSpec = require('./config/swagger');
 const connectDB = require('./config/database');
 const documentRoutes = require('./routes/documentRoutes');
 const socketIOService = require('./services/socketIOService');
@@ -37,6 +39,9 @@ connectDB();
 
 // Initialize Socket.IO service
 socketIOService.initialize(io);
+
+// Swagger API Documentation
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 // Routes
 app.use('/api/documents', documentRoutes);
