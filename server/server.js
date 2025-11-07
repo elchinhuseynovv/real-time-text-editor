@@ -6,6 +6,7 @@ const swaggerUi = require('swagger-ui-express');
 const swaggerSpec = require('./config/swagger');
 const connectDB = require('./config/database');
 const documentRoutes = require('./routes/documentRoutes');
+const authRoutes = require('./routes/authRoutes');
 const socketIOService = require('./services/socketIOService');
 const errorHandler = require('./middleware/errorHandler');
 const authMiddleware = require('./middleware/auth');
@@ -32,7 +33,6 @@ const corsOptions = {
 };
 app.use(cors(corsOptions));
 app.use(express.json());
-app.use(authMiddleware);
 
 // Connect to MongoDB
 connectDB();
@@ -43,8 +43,11 @@ socketIOService.initialize(io);
 // Swagger API Documentation
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
-// Routes
-app.use('/api/documents', documentRoutes);
+// Public routes (no auth required)
+app.use('/api/auth', authRoutes);
+
+// Protected routes (require authentication)
+app.use('/api/documents', authMiddleware, documentRoutes);
 
 // Health check endpoint
 app.get('/health', (req, res) => {

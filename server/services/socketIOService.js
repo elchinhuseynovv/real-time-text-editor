@@ -1,6 +1,9 @@
 const documentService = require('./documentService');
 const crdtService = require('./crdtService');
 const permissionService = require('./permissionService');
+const jwt = require('jsonwebtoken');
+const { JWT_SECRET } = require('../controllers/authController');
+const User = require('../models/User');
 
 /**
  * Socket.IO Service
@@ -20,6 +23,46 @@ class SocketIOService {
    */
   initialize(io) {
     this.io = io;
+
+    // Socket.IO authentication middleware
+    io.use(async (socket, next) => {
+      try {
+        const token = socket.handshake.auth?.token || socket.handshake.headers?.authorization?.replace('Bearer ', '');
+        
+        if (!token) {
+          // Fallback to username for backward compatibility
+          const username = socket.handshake.auth?.username || socket.handshake.headers?.['x-username'];
+          if (username) {
+            socket.user = { username, email: username };
+            return next();
+          }
+          return next(new Error('Authentication required'));
+        }
+
+        // Verify JWT token
+        const decoded = jwt.verify(token, JWT_SECRET);
+        
+        // Get user from database
+        const user = await User.findById(decoded.userId).select('-password');
+        if (!user) {
+          return next(new Error('User not found'));
+        }
+
+        socket.user = {
+          userId: user._id.toString(),
+          email: user.email,
+          username: user.email, // Use email as username for compatibility
+          name: user.name,
+        };
+
+        next();
+      } catch (error) {
+        if (error.name === 'JsonWebTokenError' || error.name === 'TokenExpiredError') {
+          return next(new Error('Invalid or expired token'));
+        }
+        next(error);
+      }
+    });
 
     io.on('connection', (socket) => {
       this.handleConnection(socket);
@@ -95,13 +138,24 @@ class SocketIOService {
   /**
    * Handle user join
    * @param {string} clientId - Client ID
-   * @param {string} username - Username
+   * @param {string} username - Username (optional, uses socket.user if available)
    */
   async handleUserJoin(clientId, username) {
     const client = this.clients.get(clientId);
     if (client) {
-      client.username = username;
-      console.log(`👤 User joined: ${username}`);
+      // Use authenticated user info if available, otherwise use provided username
+      const socket = client.socket;
+      if (socket.user) {
+        client.username = socket.user.username || socket.user.email;
+        client.userId = socket.user.userId;
+        client.name = socket.user.name;
+      } else if (username) {
+        client.username = username;
+      } else {
+        console.warn(`⚠️ No username provided for client ${clientId}`);
+        return;
+      }
+      console.log(`👤 User joined: ${client.username}`);
       this.broadcastUserList();
     }
   }

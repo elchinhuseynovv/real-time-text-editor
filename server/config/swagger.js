@@ -24,7 +24,13 @@ const options = {
           type: 'apiKey',
           in: 'header',
           name: 'x-username',
-          description: 'Username header for authentication',
+          description: 'Username header for authentication (deprecated, use BearerAuth)',
+        },
+        BearerAuth: {
+          type: 'http',
+          scheme: 'bearer',
+          bearerFormat: 'JWT',
+          description: 'JWT Bearer token authentication',
         },
       },
       schemas: {
@@ -166,11 +172,17 @@ const options = {
         },
         AddPermissionRequest: {
           type: 'object',
-          required: ['username', 'role'],
+          required: ['email', 'role'],
           properties: {
+            email: {
+              type: 'string',
+              format: 'email',
+              description: 'Email address to grant permission to',
+              example: 'jane.doe@example.com',
+            },
             username: {
               type: 'string',
-              description: 'Username to grant permission to',
+              description: 'Username (deprecated, use email instead)',
               example: 'jane_doe',
             },
             role: {
@@ -183,11 +195,17 @@ const options = {
         },
         RemovePermissionRequest: {
           type: 'object',
-          required: ['username'],
+          required: ['email'],
           properties: {
+            email: {
+              type: 'string',
+              format: 'email',
+              description: 'Email address to remove permission from',
+              example: 'jane.doe@example.com',
+            },
             username: {
               type: 'string',
-              description: 'Username to remove permission from',
+              description: 'Username (deprecated, use email instead)',
               example: 'jane_doe',
             },
           },
@@ -256,7 +274,7 @@ const options = {
     },
     security: [
       {
-        UsernameHeader: [],
+        BearerAuth: [],
       },
     ],
   },

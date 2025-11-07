@@ -115,7 +115,7 @@ describe('Document API Routes', () => {
         title: 'New Document',
       });
 
-      expect(response.status).toBe(400);
+      expect(response.status).toBe(401); // Changed from 400 to 401 because auth middleware now requires authentication
     });
   });
 
@@ -218,14 +218,14 @@ describe('Document API Routes', () => {
         .post(`/api/documents/${doc._id}/permissions`)
         .set('x-username', testUser)
         .send({
-          username: 'newuser',
+          email: 'newuser@example.com',
           role: 'editor',
         });
 
       expect(response.status).toBe(200);
 
       const updated = await Document.findById(doc._id);
-      const permission = updated.permissions.find((p) => p.username === 'newuser');
+      const permission = updated.permissions.find((p) => p.username === 'newuser@example.com');
       expect(permission).toBeDefined();
       expect(permission.role).toBe('editor');
     });
@@ -241,7 +241,7 @@ describe('Document API Routes', () => {
         .post(`/api/documents/${doc._id}/permissions`)
         .set('x-username', 'editor1')
         .send({
-          username: 'newuser',
+          email: 'newuser@example.com',
           role: 'editor',
         });
 
@@ -261,17 +261,17 @@ describe('Document API Routes', () => {
         .delete(`/api/documents/${doc._id}/permissions`)
         .set('x-username', testUser)
         .send({
-          username: 'editor1',
+          email: 'editor1@example.com',
         });
 
       expect(response.status).toBe(200);
 
       const updated = await Document.findById(doc._id);
-      const permission = updated.permissions.find((p) => p.username === 'editor1');
+      const permission = updated.permissions.find((p) => p.username === 'editor1@example.com');
       expect(permission).toBeUndefined();
     });
 
-    test('should require username in body', async () => {
+    test('should require email in body', async () => {
       const doc = await Document.create({
         title: 'Test',
         owner: testUser,
@@ -409,7 +409,7 @@ describe('Document API Routes', () => {
     test('should require username', async () => {
       const response = await request(app).get('/api/documents/share/test-token-123');
 
-      expect(response.status).toBe(400);
+      expect(response.status).toBe(401); // Changed from 400 to 401 because auth middleware now requires authentication
     });
 
     test('should return 404 for invalid token', async () => {
