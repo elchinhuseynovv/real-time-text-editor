@@ -241,10 +241,10 @@ class DocumentService {
   /**
    * Join document via share token
    * @param {string} shareToken - Share token
-   * @param {string} username - Username joining
+   * @param {string} userEmail - User email joining
    * @returns {Promise<Object>} Document and access level
    */
-  async joinDocumentByShareToken(shareToken, username) {
+  async joinDocumentByShareToken(shareToken, userEmail) {
     try {
       const document = await Document.findOne({ shareToken });
       if (!document) {
@@ -253,19 +253,22 @@ class DocumentService {
 
       const access = document.shareAccess;
 
+      // Normalize email to lowercase for consistency
+      const normalizedEmail = userEmail.toLowerCase().trim();
+
       // Add user permission based on share access
       if (access === 'edit') {
         // Add as editor
-        const existingPermission = document.permissions.find((p) => p.username === username);
+        const existingPermission = document.permissions.find((p) => p.username === normalizedEmail);
         if (!existingPermission) {
-          document.permissions.push({ username, role: 'editor' });
+          document.permissions.push({ username: normalizedEmail, role: 'editor' });
           await document.save();
         }
       } else if (access === 'read') {
         // Add as viewer
-        const existingPermission = document.permissions.find((p) => p.username === username);
+        const existingPermission = document.permissions.find((p) => p.username === normalizedEmail);
         if (!existingPermission) {
-          document.permissions.push({ username, role: 'viewer' });
+          document.permissions.push({ username: normalizedEmail, role: 'viewer' });
           await document.save();
         }
       }

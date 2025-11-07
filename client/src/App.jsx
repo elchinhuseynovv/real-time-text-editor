@@ -15,21 +15,30 @@ function App() {
   const [users, setUsers] = useState([]);
   const [messages, setMessages] = useState([]);
   const [newMessage, setNewMessage] = useState('');
-  const [username, setUsername] = useState('');
   const [isConnected, setIsConnected] = useState(false);
   const [showChat, setShowChat] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [currentUser, setCurrentUser] = useState(null);
+  const [userToken, setUserToken] = useState(null);
+  const [userInfo, setUserInfo] = useState(null); // { id, name, email }
   const [saveStatus, setSaveStatus] = useState('');
-  const [screen, setScreen] = useState('login'); // 'login', 'documents', 'editor'
+  const [screen, setScreen] = useState('login'); // 'login', 'register', 'documents', 'editor'
+  // Auth form states
+  const [loginEmail, setLoginEmail] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [registerName, setRegisterName] = useState('');
+  const [registerEmail, setRegisterEmail] = useState('');
+  const [registerPassword, setRegisterPassword] = useState('');
+  const [authError, setAuthError] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
   const [documents, setDocuments] = useState([]);
   const [loadingDocuments, setLoadingDocuments] = useState(false);
   const [userRole, setUserRole] = useState(null); // 'owner', 'editor', 'viewer', null
   const [shareLink, setShareLink] = useState(null);
   const [showShareModal, setShowShareModal] = useState(false);
   const [shareAccess, setShareAccess] = useState('edit'); // 'read' or 'edit'
-  const [shareUsername, setShareUsername] = useState(''); // Username to share with
-  const [shareMethod, setShareMethod] = useState('link'); // 'link' or 'username'
+  const [shareEmail, setShareEmail] = useState(''); // Email to share with
+  const [shareMethod, setShareMethod] = useState('link'); // 'link' or 'email'
   const [sharedUsers, setSharedUsers] = useState([]); // List of users with access
   const [unreadMessages, setUnreadMessages] = useState(0); // Unread message count
   const [savedContent, setSavedContent] = useState(''); // Track saved content
@@ -48,7 +57,8 @@ function App() {
   // Initialize from localStorage and URL on mount
   useEffect(() => {
     // Restore session from localStorage
-    const savedUser = localStorage.getItem('collabEdit_user');
+    const savedToken = localStorage.getItem('collabEdit_token');
+    const savedUserInfo = localStorage.getItem('collabEdit_userInfo');
     const savedScreen = localStorage.getItem('collabEdit_screen');
     const savedDocumentId = localStorage.getItem('collabEdit_documentId');
     
@@ -57,38 +67,49 @@ function App() {
     const documentMatch = path.match(/\/document\/([a-f0-9]+)/);
     const shareMatch = path.match(/\/share\/([a-f0-9]+)/);
     
-    if (savedUser) {
-      setCurrentUser(savedUser);
-      
-      if (shareMatch && shareMatch[1]) {
-        // Share token in URL - will be handled by joinDocumentByToken
-        setScreen('login'); // Stay on login until joined
-      } else if (documentMatch && documentMatch[1]) {
-        // Document ID in URL - only navigate if we were on editor screen
-        if (savedScreen === 'editor') {
-          const docId = documentMatch[1];
-          setDocumentId(docId);
+    if (savedToken && savedUserInfo) {
+      try {
+        const userInfo = JSON.parse(savedUserInfo);
+        setUserToken(savedToken);
+        setUserInfo(userInfo);
+        setCurrentUser(userInfo.email); // Use email as username for compatibility
+        
+        if (shareMatch && shareMatch[1]) {
+          // Share token in URL - will be handled by joinDocumentByToken useEffect
+          // Don't change screen here, let the joinDocumentByToken useEffect handle it
+        } else if (documentMatch && documentMatch[1]) {
+          // Document ID in URL - only navigate if we were on editor screen
+          if (savedScreen === 'editor') {
+            const docId = documentMatch[1];
+            setDocumentId(docId);
+            setScreen('editor');
+          } else {
+            // User was on documents screen, stay there
+            setScreen(savedScreen || 'documents');
+          }
+        } else if (savedScreen === 'editor' && savedDocumentId) {
+          // Restore editor state
+          setDocumentId(savedDocumentId);
           setScreen('editor');
         } else {
-          // User was on documents screen, stay there
           setScreen(savedScreen || 'documents');
         }
-      } else if (savedScreen === 'editor' && savedDocumentId) {
-        // Restore editor state
-        setDocumentId(savedDocumentId);
-        setScreen('editor');
-      } else {
-        setScreen(savedScreen || 'documents');
+      } catch (error) {
+        console.error('Error parsing saved user info:', error);
+        // Clear invalid data
+        localStorage.removeItem('collabEdit_token');
+        localStorage.removeItem('collabEdit_userInfo');
       }
     }
   }, []);
   
   // Save session to localStorage when it changes
   useEffect(() => {
-    if (currentUser) {
-      localStorage.setItem('collabEdit_user', currentUser);
+    if (userToken && userInfo) {
+      localStorage.setItem('collabEdit_token', userToken);
+      localStorage.setItem('collabEdit_userInfo', JSON.stringify(userInfo));
     }
-  }, [currentUser]);
+  }, [userToken, userInfo]);
   
   useEffect(() => {
     if (screen !== 'login') {
@@ -122,16 +143,21 @@ function App() {
 
   // Fetch documents from backend - memoized to avoid dependency issues
   const fetchDocuments = useCallback(async () => {
-    if (!currentUser) return;
+    if (!userToken) return;
     
     setLoadingDocuments(true);
     try {
       const response = await fetch(`${API_BASE_URL}/api/documents`, {
         headers: {
-          'x-username': currentUser
+          'Authorization': `Bearer ${userToken}`
         }
       });
       if (!response.ok) {
+        if (response.status === 401) {
+          // Token expired or invalid
+          handleLogout();
+          return;
+        }
         throw new Error(`HTTP error! status: ${response.status}`);
       }
       const data = await response.json();
@@ -148,7 +174,7 @@ function App() {
       setLoadingDocuments(false);
       }
     }
-  }, [currentUser]);
+  }, [userToken]);
 
   // Handle messages from server - defined early to avoid hoisting issues
   const handleServerMessage = useCallback((type, data) => {
@@ -208,7 +234,7 @@ function App() {
           
           // If this is a new document (documentId was null), set user role to owner
           setDocumentId(prevId => {
-            if (!prevId && currentUser) {
+            if (!prevId && userToken) {
               setUserRole('owner');
             }
             return newDocId;
@@ -243,6 +269,27 @@ function App() {
         }, 3000);
         break;
       
+      case 'role_changed':
+        // Handle role change notification
+        if (data.documentId === documentId) {
+          console.log('📢 Role changed to:', data.role);
+          if (data.role === null) {
+            // Permission removed - user no longer has access
+            setUserRole(null);
+            alert('Your access to this document has been removed.');
+            setScreen('documents');
+          } else {
+            // Role updated
+            setUserRole(data.role);
+            if (data.role === 'viewer') {
+              alert('Your access has been changed to read-only.');
+            } else if (data.role === 'editor') {
+              alert('Your access has been changed to editor.');
+            }
+          }
+        }
+        break;
+        
       case 'error':
         console.error('Server error:', data?.message);
         if (isMountedRef.current) {
@@ -253,7 +300,7 @@ function App() {
       default:
         console.log('Unknown message type:', type);
     }
-  }, [documentId, showChat, currentUser]); // Removed documentContent and documentTitle from dependencies
+  }, [documentId, showChat, userToken]); // Removed documentContent and documentTitle from dependencies
   
   // Update ref whenever handleServerMessage changes
   useEffect(() => {
@@ -269,6 +316,30 @@ function App() {
     documentTitleRef.current = documentTitle;
   }, [documentTitle]);
 
+  // Refresh shared users list when share modal is opened
+  useEffect(() => {
+    if (showShareModal && documentId && userToken) {
+      // Refresh shared users list when modal opens
+      fetch(`${API_BASE_URL}/api/documents/${documentId}`, {
+        headers: {
+          'Authorization': `Bearer ${userToken}`
+        }
+      })
+        .then(res => res.json())
+        .then(doc => {
+          setSharedUsers(doc.permissions || []);
+          // Also update share link if exists
+          if (doc.shareToken) {
+            const baseUrl = window.location.origin;
+            setShareLink(`${baseUrl}/share/${doc.shareToken}`);
+          }
+        })
+        .catch(err => {
+          console.error('Error refreshing shared users:', err);
+        });
+    }
+  }, [showShareModal, documentId, userToken]);
+
   // Connect to Socket.IO server - defined early to avoid hoisting issues
   const connectToServer = useCallback(() => {
     // Don't connect if component unmounted
@@ -276,8 +347,8 @@ function App() {
       return;
     }
     
-    // Don't connect if not in editor screen or no user
-    if (screen !== 'editor' || !currentUser) {
+    // Don't connect if not in editor screen or no token
+    if (screen !== 'editor' || !userToken) {
       return;
     }
     
@@ -301,7 +372,14 @@ function App() {
         reconnectionDelayMax: 5000,
         reconnectionAttempts: Infinity,
         timeout: 20000,
-        autoConnect: true
+        autoConnect: true,
+        auth: {
+          token: userToken || undefined,
+          username: currentUser || undefined, // Fallback for backward compatibility
+        },
+        extraHeaders: userToken ? {
+          'Authorization': `Bearer ${userToken}`
+        } : {}
       });
       
       socket.current.on('connect', () => {
@@ -312,7 +390,7 @@ function App() {
         console.log('✅ Connected to server');
         setIsConnected(true);
         
-        // Send user join message
+        // Send user join message (username will be extracted from token if available)
         if (socket.current && socket.current.connected && currentUser) {
           socket.current.emit('user_join', { username: currentUser });
         }
@@ -329,7 +407,7 @@ function App() {
         if (reason === 'io server disconnect') {
           // Server disconnected, reconnect manually after delay
           setTimeout(() => {
-            if (isMountedRef.current && screen === 'editor' && currentUser && (!socket.current || !socket.current.connected)) {
+            if (isMountedRef.current && screen === 'editor' && userToken && (!socket.current || !socket.current.connected)) {
               connectToServer();
             }
           }, 1000);
@@ -365,6 +443,7 @@ function App() {
       socket.current.on('chat_message', (data) => handleServerMessageRef.current?.('chat_message', data));
       socket.current.on('save_success', (data) => handleServerMessageRef.current?.('save_success', data));
       socket.current.on('save_error', (data) => handleServerMessageRef.current?.('save_error', data));
+      socket.current.on('role_changed', (data) => handleServerMessageRef.current?.('role_changed', data));
       socket.current.on('error', (data) => handleServerMessageRef.current?.('error', data));
       
     } catch (error) {
@@ -374,18 +453,18 @@ function App() {
         socket.current = null;
       }
     }
-  }, [currentUser, screen]); // Removed handleServerMessage from dependencies
+  }, [userToken, screen]); // Removed handleServerMessage from dependencies
 
   // Fetch documents when user logs in
   useEffect(() => {
-    if (currentUser && screen === 'documents') {
+    if (userToken && screen === 'documents') {
       fetchDocuments();
     }
-  }, [currentUser, screen, fetchDocuments]);
+  }, [userToken, screen, fetchDocuments]);
 
   // Initialize connection when entering editor
   useEffect(() => {
-    if (currentUser && screen === 'editor') {
+    if (userToken && screen === 'editor') {
       connectToServer();
     }
     
@@ -403,7 +482,7 @@ function App() {
         setIsConnected(false);
       }
     };
-  }, [currentUser, screen, connectToServer]);
+  }, [userToken, screen, connectToServer]);
 
   // Send document ID when connection is ready and we have a document ID
   useEffect(() => {
@@ -428,7 +507,7 @@ function App() {
 
   // Load document when documentId is set (e.g., from URL or after save)
   useEffect(() => {
-    if (documentId && currentUser && screen === 'editor' && isConnected) {
+    if (documentId && userToken && screen === 'editor' && isConnected) {
       // Only load if we don't have content yet (new document or loaded from URL)
       const hasContent = documentContent && documentContent.length > 0;
       const isUntitled = documentTitle === 'Untitled Document';
@@ -465,7 +544,7 @@ function App() {
     try {
       const response = await fetch(`${API_BASE_URL}/api/documents/${doc._id}`, {
         headers: {
-          'x-username': currentUser
+          'Authorization': `Bearer ${userToken}`
         }
       });
       if (!response.ok) {
@@ -500,6 +579,9 @@ function App() {
         setSavedContent(fullDoc.content || '');
         setSavedTitle(fullDoc.title || 'Untitled Document');
         
+        // Update shared users list
+        setSharedUsers(fullDoc.permissions || []);
+        
         // Update URL
         window.history.pushState({}, '', `/document/${fullDoc._id}`);
         
@@ -531,7 +613,7 @@ function App() {
       const response = await fetch(`${API_BASE_URL}/api/documents/${docId}`, {
         method: 'DELETE',
         headers: {
-          'x-username': currentUser
+          'Authorization': `Bearer ${userToken}`
         }
       });
       
@@ -551,32 +633,151 @@ function App() {
     }
   };
 
-  // Logout function
-  const handleLogout = () => {
-    // Close Socket.IO connection
-    if (socket.current) {
-      socket.current.disconnect();
-      socket.current = null;
+  // Register function
+  const handleRegister = async (e) => {
+    e?.preventDefault();
+    setAuthError('');
+    setIsLoading(true);
+
+    if (!registerName.trim() || !registerEmail.trim() || !registerPassword.trim()) {
+      setAuthError('All fields are required');
+      setIsLoading(false);
+      return;
     }
-    
-    // Clear localStorage
-    localStorage.removeItem('collabEdit_user');
-    localStorage.removeItem('collabEdit_screen');
-    localStorage.removeItem('collabEdit_documentId');
-    
-    // Reset state
-    setCurrentUser(null);
-    setScreen('login');
-    setDocumentId(null);
-    setDocumentContent('');
-    setDocumentTitle('Untitled Document');
-    setDocuments([]);
-    setMessages([]);
-    setIsConnected(false);
-    setUserRole(null);
-    
-    // Reset URL
-    window.history.pushState({}, '', '/');
+
+    if (registerPassword.length < 6) {
+      setAuthError('Password must be at least 6 characters long');
+      setIsLoading(false);
+      return;
+    }
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/auth/register`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          name: registerName.trim(),
+          email: registerEmail.trim().toLowerCase(),
+          password: registerPassword,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Registration failed');
+      }
+
+      // Save token and user info
+      setUserToken(data.token);
+      setUserInfo(data.user);
+      setCurrentUser(data.user.email);
+      setScreen('documents');
+      
+      // Clear form
+      setRegisterName('');
+      setRegisterEmail('');
+      setRegisterPassword('');
+    } catch (error) {
+      console.error('Registration error:', error);
+      setAuthError(error.message || 'Registration failed. Please try again.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Login function
+  const handleLogin = async (e) => {
+    e?.preventDefault();
+    setAuthError('');
+    setIsLoading(true);
+
+    if (!loginEmail.trim() || !loginPassword.trim()) {
+      setAuthError('Email and password are required');
+      setIsLoading(false);
+      return;
+    }
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/auth/login`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          email: loginEmail.trim().toLowerCase(),
+          password: loginPassword,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Login failed');
+      }
+
+      // Save token and user info
+      setUserToken(data.token);
+      setUserInfo(data.user);
+      setCurrentUser(data.user.email);
+      setScreen('documents');
+      
+      // Clear form
+      setLoginEmail('');
+      setLoginPassword('');
+    } catch (error) {
+      console.error('Login error:', error);
+      setAuthError(error.message || 'Login failed. Please check your credentials.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Logout function
+  const handleLogout = async () => {
+    try {
+      // Call logout endpoint if token exists
+      if (userToken) {
+        await fetch(`${API_BASE_URL}/api/auth/logout`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${userToken}`
+          }
+        }).catch(err => console.error('Logout API error:', err));
+      }
+    } catch (error) {
+      console.error('Logout error:', error);
+    } finally {
+      // Close Socket.IO connection
+      if (socket.current) {
+        socket.current.disconnect();
+        socket.current = null;
+      }
+      
+      // Clear localStorage
+      localStorage.removeItem('collabEdit_token');
+      localStorage.removeItem('collabEdit_userInfo');
+      localStorage.removeItem('collabEdit_screen');
+      localStorage.removeItem('collabEdit_documentId');
+      
+      // Reset state
+      setCurrentUser(null);
+      setUserToken(null);
+      setUserInfo(null);
+      setScreen('login');
+      setDocumentId(null);
+      setDocumentContent('');
+      setDocumentTitle('Untitled Document');
+      setDocuments([]);
+      setMessages([]);
+      setIsConnected(false);
+      setUserRole(null);
+      
+      // Reset URL
+      window.history.pushState({}, '', '/');
+    }
   };
 
   // Go back to documents list
@@ -788,7 +989,7 @@ function App() {
       // Fetch document to get current permissions and share link
       const docResponse = await fetch(`${API_BASE_URL}/api/documents/${documentId}`, {
         headers: {
-          'x-username': currentUser
+          'Authorization': `Bearer ${userToken}`
         }
       });
       
@@ -808,7 +1009,7 @@ function App() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-username': currentUser
+          'Authorization': `Bearer ${userToken}`
         },
         body: JSON.stringify({ access: shareAccess })
       });
@@ -824,7 +1025,7 @@ function App() {
       // Refresh document to get updated permissions
       const refreshResponse = await fetch(`${API_BASE_URL}/api/documents/${documentId}`, {
         headers: {
-          'x-username': currentUser
+          'Authorization': `Bearer ${userToken}`
         }
       });
       if (refreshResponse.ok) {
@@ -859,7 +1060,7 @@ function App() {
       const response = await fetch(`${API_BASE_URL}/api/documents/${documentId}/share`, {
         method: 'DELETE',
         headers: {
-          'x-username': currentUser
+          'Authorization': `Bearer ${userToken}`
         }
       });
 
@@ -876,15 +1077,22 @@ function App() {
     }
   };
 
-  // Share document by username
-  const shareByUsername = async () => {
+  // Share document by email
+  const shareByEmail = async () => {
     if (!documentId) {
       alert('Please save the document first before sharing');
       return;
     }
 
-    if (!shareUsername.trim()) {
-      alert('Please enter a username');
+    if (!shareEmail.trim()) {
+      alert('Please enter an email address');
+      return;
+    }
+
+    // Basic email validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(shareEmail.trim())) {
+      alert('Please enter a valid email address');
       return;
     }
 
@@ -896,9 +1104,9 @@ function App() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-username': currentUser
+          'Authorization': `Bearer ${userToken}`
         },
-        body: JSON.stringify({ username: shareUsername.trim(), role })
+        body: JSON.stringify({ email: shareEmail.trim().toLowerCase(), role })
       });
 
       if (!response.ok) {
@@ -906,13 +1114,13 @@ function App() {
         throw new Error(error.error || 'Failed to share document');
       }
 
-      alert(`Document shared with ${shareUsername.trim()} successfully!`);
-      setShareUsername('');
+      alert(`Document shared with ${shareEmail.trim()} successfully!`);
+      setShareEmail('');
       
       // Refresh document to get updated permissions
       const refreshResponse = await fetch(`${API_BASE_URL}/api/documents/${documentId}`, {
         headers: {
-          'x-username': currentUser
+          'Authorization': `Bearer ${userToken}`
         }
       });
       if (refreshResponse.ok) {
@@ -929,26 +1137,30 @@ function App() {
   };
 
   // Join document via share token
-  const joinDocumentByToken = async (token) => {
-    if (!currentUser) {
-      alert('Please login first');
+  const joinDocumentByToken = useCallback(async (token) => {
+    if (!userToken) {
+      console.log('⚠️ No user token, cannot join document');
+      setScreen('login');
       return;
     }
 
+    console.log('🔗 Attempting to join document with token:', token);
     try {
       const response = await fetch(`${API_BASE_URL}/api/documents/share/${token}`, {
         method: 'GET',
         headers: {
-          'x-username': currentUser
+          'Authorization': `Bearer ${userToken}`
         }
       });
 
       if (!response.ok) {
         const error = await response.json();
+        console.error('❌ Failed to join document:', error);
         throw new Error(error.error || 'Failed to join document');
       }
 
       const data = await response.json();
+      console.log('✅ Successfully joined document:', data);
       
       // Set user role based on access
       if (data.access === 'read') {
@@ -957,34 +1169,73 @@ function App() {
         setUserRole('editor');
       }
 
-      // Open the document
+      // Open the document (this will fetch the latest document including updated permissions)
       await openDocument({ _id: data.documentId, title: data.title });
+      
+      // Refresh shared users list after joining
+      try {
+        const refreshResponse = await fetch(`${API_BASE_URL}/api/documents/${data.documentId}`, {
+          headers: {
+            'Authorization': `Bearer ${userToken}`
+          }
+        });
+        if (refreshResponse.ok) {
+          const refreshedDoc = await refreshResponse.json();
+          setSharedUsers(refreshedDoc.permissions || []);
+          console.log('✅ Refreshed shared users list:', refreshedDoc.permissions);
+        }
+      } catch (refreshError) {
+        console.error('Error refreshing shared users:', refreshError);
+      }
       
       // Remove token from URL
       window.history.replaceState({}, '', `/document/${data.documentId}`);
     } catch (error) {
-      console.error('Error joining document:', error);
+      console.error('❌ Error joining document:', error);
       alert('Failed to join document: ' + error.message);
     }
-  };
+  }, [userToken]);
 
-  // Check for share token in URL on mount
+  // Check for share token in URL whenever userToken changes or on mount
   useEffect(() => {
-    const path = window.location.pathname;
-    const shareMatch = path.match(/\/share\/([a-f0-9]+)/);
-    if (shareMatch && shareMatch[1]) {
-      const token = shareMatch[1];
-      // Wait for user to login, then join
-      if (currentUser) {
-        joinDocumentByToken(token).catch(err => {
-          console.error('Error joining document:', err);
-        });
+    const checkShareToken = () => {
+      const path = window.location.pathname;
+      console.log('🔍 Checking URL for share token:', path);
+      const shareMatch = path.match(/\/share\/([a-f0-9]+)/);
+      if (shareMatch && shareMatch[1]) {
+        const token = shareMatch[1];
+        console.log('✅ Share token found in URL:', token);
+        // Wait for user to login, then join
+        if (userToken) {
+          console.log('🔗 User is logged in, joining document...', token);
+          joinDocumentByToken(token).catch(err => {
+            console.error('Error joining document:', err);
+            alert('Failed to join document: ' + err.message);
+          });
+        } else {
+          // User not logged in, show login screen
+          console.log('⚠️ User not logged in, showing login screen');
+          setScreen('login');
+        }
       }
-    }
-  }, [currentUser]);
+    };
 
-  // Login screen
-  if (screen === 'login') {
+    // Check immediately
+    checkShareToken();
+
+    // Also listen for URL changes (back/forward buttons)
+    const handlePopState = () => {
+      checkShareToken();
+    };
+    window.addEventListener('popstate', handlePopState);
+
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, [userToken, joinDocumentByToken]);
+
+  // Login/Register screens
+  if (screen === 'login' || screen === 'register') {
     return (
       <div className="login-container">
         <div className="login-card">
@@ -993,36 +1244,178 @@ function App() {
             <p className="login-subtitle">Real-time Collaborative Text Editor</p>
           </div>
           
-          <div className="login-form">
-            <div className="form-group">
-              <label className="form-label">Enter your name</label>
-              <input
-                type="text"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                className="form-input"
-                placeholder="Your name"
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && username.trim()) {
-                    setCurrentUser(username);
-                    setScreen('documents');
-                  }
-                }}
-              />
+          {screen === 'login' ? (
+            <div className="login-form">
+              <h2 style={{ marginBottom: '32px', fontSize: '24px', fontWeight: '600', textAlign: 'center', color: '#e2e8f0' }}>Sign in</h2>
+              
+              {authError && (
+                <div style={{
+                  padding: '12px',
+                  marginBottom: '16px',
+                  background: '#fee2e2',
+                  color: '#dc2626',
+                  borderRadius: '8px',
+                  fontSize: '14px',
+                  textAlign: 'center'
+                }}>
+                  {authError}
+                </div>
+              )}
+              
+              <form onSubmit={handleLogin}>
+                <div className="form-group">
+                  <label className="form-label">Email</label>
+                  <input
+                    type="email"
+                    value={loginEmail}
+                    onChange={(e) => setLoginEmail(e.target.value)}
+                    className="form-input"
+                    placeholder="your.email@example.com"
+                    required
+                    disabled={isLoading}
+                  />
+                </div>
+                
+                <div className="form-group" style={{ marginTop: '24px' }}>
+                  <label className="form-label">Password</label>
+                  <input
+                    type="password"
+                    value={loginPassword}
+                    onChange={(e) => setLoginPassword(e.target.value)}
+                    className="form-input"
+                    placeholder="Enter your password"
+                    required
+                    disabled={isLoading}
+                    minLength={6}
+                  />
+                </div>
+                
+                <button
+                  type="submit"
+                  className="btn-primary"
+                  disabled={isLoading}
+                  style={{ width: '100%', marginTop: '32px' }}
+                >
+                  {isLoading ? 'Signing in...' : 'Sign in'}
+                </button>
+              </form>
+              
+              <div style={{ marginTop: '24px', textAlign: 'center' }}>
+                <p style={{ color: '#94a3b8', fontSize: '14px' }}>
+                  Don't have an account?{' '}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setScreen('register');
+                      setAuthError('');
+                    }}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: '#3b82f6',
+                      cursor: 'pointer',
+                      textDecoration: 'underline',
+                      fontSize: '14px'
+                    }}
+                  >
+                    Sign up
+                  </button>
+                </p>
+              </div>
             </div>
-            
-            <button
-              onClick={() => {
-                if (username.trim()) {
-                  setCurrentUser(username);
-                  setScreen('documents');
-                }
-              }}
-              className="btn-primary"
-            >
-              Continue
-            </button>
-          </div>
+          ) : (
+            <div className="login-form">
+              <h2 style={{ marginBottom: '32px', fontSize: '24px', fontWeight: '600', textAlign: 'center', color: '#e2e8f0' }}>Sign up</h2>
+              
+              {authError && (
+                <div style={{
+                  padding: '12px',
+                  marginBottom: '16px',
+                  background: '#fee2e2',
+                  color: '#dc2626',
+                  borderRadius: '8px',
+                  fontSize: '14px',
+                  textAlign: 'center'
+                }}>
+                  {authError}
+                </div>
+              )}
+              
+              <form onSubmit={handleRegister}>
+                <div className="form-group">
+                  <label className="form-label">Name</label>
+                  <input
+                    type="text"
+                    value={registerName}
+                    onChange={(e) => setRegisterName(e.target.value)}
+                    className="form-input"
+                    placeholder="Your full name"
+                    required
+                    disabled={isLoading}
+                  />
+                </div>
+                
+                <div className="form-group" style={{ marginTop: '24px' }}>
+                  <label className="form-label">Email</label>
+                  <input
+                    type="email"
+                    value={registerEmail}
+                    onChange={(e) => setRegisterEmail(e.target.value)}
+                    className="form-input"
+                    placeholder="your.email@example.com"
+                    required
+                    disabled={isLoading}
+                  />
+                </div>
+                
+                <div className="form-group" style={{ marginTop: '24px' }}>
+                  <label className="form-label">Password</label>
+                  <input
+                    type="password"
+                    value={registerPassword}
+                    onChange={(e) => setRegisterPassword(e.target.value)}
+                    className="form-input"
+                    placeholder="Minimum 6 characters"
+                    required
+                    disabled={isLoading}
+                    minLength={6}
+                  />
+                </div>
+                
+                <button
+                  type="submit"
+                  className="btn-primary"
+                  disabled={isLoading}
+                  style={{ width: '100%', marginTop: '32px' }}
+                >
+                  {isLoading ? 'Signing up...' : 'Sign up'}
+                </button>
+              </form>
+              
+              <div style={{ marginTop: '24px', textAlign: 'center' }}>
+                <p style={{ color: '#94a3b8', fontSize: '14px' }}>
+                  Already have an account?{' '}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setScreen('login');
+                      setAuthError('');
+                    }}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: '#3b82f6',
+                      cursor: 'pointer',
+                      textDecoration: 'underline',
+                      fontSize: '14px'
+                    }}
+                  >
+                    Sign in
+                  </button>
+                </p>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     );
@@ -1040,7 +1433,7 @@ function App() {
           <div className="documents-header-content">
             <div>
               <h1 className="documents-title">My Documents</h1>
-              <p className="documents-subtitle">Welcome back, {currentUser}!</p>
+              <p className="documents-subtitle">Welcome back, {userInfo?.name || currentUser}!</p>
             </div>
             <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
               <button onClick={createNewDocument} className="btn-new-document">
@@ -1441,12 +1834,12 @@ function App() {
                     <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }}>
                       <input
                         type="radio"
-                        value="username"
-                        checked={shareMethod === 'username'}
+                        value="email"
+                        checked={shareMethod === 'email'}
                         onChange={(e) => setShareMethod(e.target.value)}
                         style={{ marginRight: '6px' }}
                       />
-                      Share by Username
+                      Share by Email
                     </label>
                   </div>
                 </div>
@@ -1479,15 +1872,15 @@ function App() {
                   </div>
                 </div>
                 
-                {shareMethod === 'username' ? (
+                {shareMethod === 'email' ? (
                   <div>
-                    <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold' }}>Username:</label>
+                    <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold' }}>Email:</label>
                     <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
                       <input
-                        type="text"
-                        value={shareUsername}
-                        onChange={(e) => setShareUsername(e.target.value)}
-                        placeholder="Enter username"
+                        type="email"
+                        value={shareEmail}
+                        onChange={(e) => setShareEmail(e.target.value)}
+                        placeholder="user@example.com"
                         style={{
                           flex: 1,
                           padding: '8px',
@@ -1497,21 +1890,21 @@ function App() {
                         }}
                         onKeyDown={(e) => {
                           if (e.key === 'Enter') {
-                            shareByUsername();
+                            shareByEmail();
                           }
                         }}
                       />
                       <button
-                        onClick={shareByUsername}
-                        disabled={!shareUsername.trim()}
+                        onClick={shareByEmail}
+                        disabled={!shareEmail.trim()}
                         style={{
                           padding: '8px 16px',
                           background: '#3b82f6',
                           color: 'white',
                           border: 'none',
                           borderRadius: '4px',
-                          cursor: shareUsername.trim() ? 'pointer' : 'not-allowed',
-                          opacity: shareUsername.trim() ? 1 : 0.5
+                          cursor: shareEmail.trim() ? 'pointer' : 'not-allowed',
+                          opacity: shareEmail.trim() ? 1 : 0.5
                         }}
                       >
                         Share
@@ -1544,14 +1937,14 @@ function App() {
                                         method: 'POST',
                                         headers: {
                                           'Content-Type': 'application/json',
-                                          'x-username': currentUser
+                                          'Authorization': `Bearer ${userToken}`
                                         },
-                                        body: JSON.stringify({ username: perm.username, role: newRole })
+                                        body: JSON.stringify({ email: perm.username, role: newRole })
                                       });
                                       if (response.ok) {
                                         // Refresh shared users list
                                         const refreshResponse = await fetch(`${API_BASE_URL}/api/documents/${documentId}`, {
-                                          headers: { 'x-username': currentUser }
+                                          headers: { 'Authorization': `Bearer ${userToken}` }
                                         });
                                         if (refreshResponse.ok) {
                                           const refreshedDoc = await refreshResponse.json();
@@ -1673,14 +2066,14 @@ function App() {
                                         method: 'POST',
                                         headers: {
                                           'Content-Type': 'application/json',
-                                          'x-username': currentUser
+                                          'Authorization': `Bearer ${userToken}`
                                         },
-                                        body: JSON.stringify({ username: perm.username, role: newRole })
+                                        body: JSON.stringify({ email: perm.username, role: newRole })
                                       });
                                       if (response.ok) {
                                         // Refresh shared users list
                                         const refreshResponse = await fetch(`${API_BASE_URL}/api/documents/${documentId}`, {
-                                          headers: { 'x-username': currentUser }
+                                          headers: { 'Authorization': `Bearer ${userToken}` }
                                         });
                                         if (refreshResponse.ok) {
                                           const refreshedDoc = await refreshResponse.json();

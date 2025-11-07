@@ -137,6 +137,7 @@
   line-height: 1.6;
   display: -webkit-box;
   -webkit-line-clamp: 3;
+  line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
@@ -273,7 +274,6 @@ body {
 .login-form {
   display: flex;
   flex-direction: column;
-  gap: 24px;
 }
 
 .form-group {
@@ -321,6 +321,10 @@ body {
   font-weight: 600;
   cursor: pointer;
   transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
 }
 
 .btn-primary:hover {

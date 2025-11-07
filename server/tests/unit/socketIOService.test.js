@@ -55,11 +55,21 @@ describe('SocketIOService', () => {
     test('should initialize with Socket.IO server', () => {
       const mockIO = {
         on: jest.fn(),
+        use: jest.fn((middleware) => {
+          // Simulate middleware being called with a mock socket
+          const mockSocket = {
+            handshake: { auth: {}, headers: {} },
+            user: null,
+          };
+          middleware(mockSocket, jest.fn());
+          return mockIO; // Allow chaining
+        }),
       };
 
       socketIOService.initialize(mockIO);
 
       expect(socketIOService.io).toBe(mockIO);
+      expect(mockIO.use).toHaveBeenCalled();
       expect(mockIO.on).toHaveBeenCalledWith('connection', expect.any(Function));
     });
   });
@@ -697,10 +707,22 @@ function createMockIO() {
   };
   const mockTo = jest.fn(() => mockRoomEmitter);
 
-  return {
+  const mockIOInstance = {
     emit: jest.fn(),
     to: mockTo,
     on: jest.fn(),
+    use: jest.fn((middleware) => {
+      // Simulate middleware being called with a mock socket that passes auth
+      const mockSocket = {
+        handshake: { auth: { username: 'testuser' }, headers: {} },
+        user: { username: 'testuser', email: 'testuser' },
+      };
+      const next = jest.fn();
+      middleware(mockSocket, next);
+      return mockIOInstance; // Allow chaining
+    }),
     _mockEmit: mockEmit, // Expose for testing
   };
+  
+  return mockIOInstance;
 }

@@ -3,10 +3,10 @@ const mongoose = require('mongoose');
 const documentSchema = new mongoose.Schema({
   title: { type: String, default: 'Untitled Document' },
   content: { type: String, default: '' },
-  owner: { type: String, required: true }, // Username of document owner
+  owner: { type: String, required: true }, // Email of document owner
   permissions: [
     {
-      username: { type: String, required: true },
+      username: { type: String, required: true }, // Stores email address (kept as 'username' for backward compatibility)
       role: {
         type: String,
         enum: ['owner', 'editor', 'viewer'],
