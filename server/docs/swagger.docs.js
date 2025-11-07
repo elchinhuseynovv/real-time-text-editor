@@ -691,4 +691,3 @@
  *                   type: string
  *                   example: connected
  */
-

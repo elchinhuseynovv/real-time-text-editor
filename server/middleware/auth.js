@@ -17,13 +17,17 @@ const authMiddleware = (req, res, next) => {
         req.user = { username, email: username }; // Temporary compatibility
         return next();
       }
-      return res.status(401).json({ error: 'Authentication required. Please provide a valid token.' });
+      return res
+        .status(401)
+        .json({ error: 'Authentication required. Please provide a valid token.' });
     }
 
     const token = authHeader.substring(7); // Remove 'Bearer ' prefix
 
     if (!token) {
-      return res.status(401).json({ error: 'Authentication required. Please provide a valid token.' });
+      return res
+        .status(401)
+        .json({ error: 'Authentication required. Please provide a valid token.' });
     }
 
     // Verify token

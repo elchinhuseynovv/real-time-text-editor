@@ -27,11 +27,14 @@ class SocketIOService {
     // Socket.IO authentication middleware
     io.use(async (socket, next) => {
       try {
-        const token = socket.handshake.auth?.token || socket.handshake.headers?.authorization?.replace('Bearer ', '');
-        
+        const token =
+          socket.handshake.auth?.token ||
+          socket.handshake.headers?.authorization?.replace('Bearer ', '');
+
         if (!token) {
           // Fallback to username for backward compatibility
-          const username = socket.handshake.auth?.username || socket.handshake.headers?.['x-username'];
+          const username =
+            socket.handshake.auth?.username || socket.handshake.headers?.['x-username'];
           if (username) {
             socket.user = { username, email: username };
             return next();
@@ -41,7 +44,7 @@ class SocketIOService {
 
         // Verify JWT token
         const decoded = jwt.verify(token, JWT_SECRET);
-        
+
         // Get user from database
         const user = await User.findById(decoded.userId).select('-password');
         if (!user) {
@@ -644,6 +647,34 @@ class SocketIOService {
           : null;
       })
       .filter(Boolean);
+  }
+
+  /**
+   * Notify a user about role change for a document
+   * @param {string} documentId - Document ID
+   * @param {string} userEmail - User email whose role changed
+   * @param {string} newRole - New role ('owner', 'editor', 'viewer') or null if removed
+   */
+  notifyRoleChange(documentId, userEmail, newRole) {
+    if (!this.io) {
+      return;
+    }
+
+    // Find all clients for this user email viewing this document
+    const normalizedEmail = userEmail.toLowerCase().trim();
+    for (const [_clientId, client] of this.clients.entries()) {
+      const clientEmail = (client.username || '').toLowerCase().trim();
+      if (clientEmail === normalizedEmail && client.documentId === documentId) {
+        // User is viewing this document, notify them
+        this.sendToClient(client.socket, 'role_changed', {
+          documentId,
+          role: newRole,
+        });
+        console.log(
+          `📢 Notified ${client.username} about role change to ${newRole || 'no access'} for document ${documentId}`
+        );
+      }
+    }
   }
 
   /**

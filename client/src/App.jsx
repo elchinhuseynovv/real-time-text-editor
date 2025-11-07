@@ -75,8 +75,8 @@ function App() {
         setCurrentUser(userInfo.email); // Use email as username for compatibility
         
         if (shareMatch && shareMatch[1]) {
-          // Share token in URL - will be handled by joinDocumentByToken
-          setScreen('documents'); // Go to documents, will join after
+          // Share token in URL - will be handled by joinDocumentByToken useEffect
+          // Don't change screen here, let the joinDocumentByToken useEffect handle it
         } else if (documentMatch && documentMatch[1]) {
           // Document ID in URL - only navigate if we were on editor screen
           if (savedScreen === 'editor') {
@@ -269,6 +269,27 @@ function App() {
         }, 3000);
         break;
       
+      case 'role_changed':
+        // Handle role change notification
+        if (data.documentId === documentId) {
+          console.log('📢 Role changed to:', data.role);
+          if (data.role === null) {
+            // Permission removed - user no longer has access
+            setUserRole(null);
+            alert('Your access to this document has been removed.');
+            setScreen('documents');
+          } else {
+            // Role updated
+            setUserRole(data.role);
+            if (data.role === 'viewer') {
+              alert('Your access has been changed to read-only.');
+            } else if (data.role === 'editor') {
+              alert('Your access has been changed to editor.');
+            }
+          }
+        }
+        break;
+        
       case 'error':
         console.error('Server error:', data?.message);
         if (isMountedRef.current) {
@@ -294,6 +315,30 @@ function App() {
   useEffect(() => {
     documentTitleRef.current = documentTitle;
   }, [documentTitle]);
+
+  // Refresh shared users list when share modal is opened
+  useEffect(() => {
+    if (showShareModal && documentId && userToken) {
+      // Refresh shared users list when modal opens
+      fetch(`${API_BASE_URL}/api/documents/${documentId}`, {
+        headers: {
+          'Authorization': `Bearer ${userToken}`
+        }
+      })
+        .then(res => res.json())
+        .then(doc => {
+          setSharedUsers(doc.permissions || []);
+          // Also update share link if exists
+          if (doc.shareToken) {
+            const baseUrl = window.location.origin;
+            setShareLink(`${baseUrl}/share/${doc.shareToken}`);
+          }
+        })
+        .catch(err => {
+          console.error('Error refreshing shared users:', err);
+        });
+    }
+  }, [showShareModal, documentId, userToken]);
 
   // Connect to Socket.IO server - defined early to avoid hoisting issues
   const connectToServer = useCallback(() => {
@@ -398,6 +443,7 @@ function App() {
       socket.current.on('chat_message', (data) => handleServerMessageRef.current?.('chat_message', data));
       socket.current.on('save_success', (data) => handleServerMessageRef.current?.('save_success', data));
       socket.current.on('save_error', (data) => handleServerMessageRef.current?.('save_error', data));
+      socket.current.on('role_changed', (data) => handleServerMessageRef.current?.('role_changed', data));
       socket.current.on('error', (data) => handleServerMessageRef.current?.('error', data));
       
     } catch (error) {
@@ -532,6 +578,9 @@ function App() {
         // Update saved state
         setSavedContent(fullDoc.content || '');
         setSavedTitle(fullDoc.title || 'Untitled Document');
+        
+        // Update shared users list
+        setSharedUsers(fullDoc.permissions || []);
         
         // Update URL
         window.history.pushState({}, '', `/document/${fullDoc._id}`);
@@ -1088,12 +1137,14 @@ function App() {
   };
 
   // Join document via share token
-  const joinDocumentByToken = async (token) => {
+  const joinDocumentByToken = useCallback(async (token) => {
     if (!userToken) {
-      alert('Please login first');
+      console.log('⚠️ No user token, cannot join document');
+      setScreen('login');
       return;
     }
 
+    console.log('🔗 Attempting to join document with token:', token);
     try {
       const response = await fetch(`${API_BASE_URL}/api/documents/share/${token}`, {
         method: 'GET',
@@ -1104,10 +1155,12 @@ function App() {
 
       if (!response.ok) {
         const error = await response.json();
+        console.error('❌ Failed to join document:', error);
         throw new Error(error.error || 'Failed to join document');
       }
 
       const data = await response.json();
+      console.log('✅ Successfully joined document:', data);
       
       // Set user role based on access
       if (data.access === 'read') {
@@ -1116,31 +1169,70 @@ function App() {
         setUserRole('editor');
       }
 
-      // Open the document
+      // Open the document (this will fetch the latest document including updated permissions)
       await openDocument({ _id: data.documentId, title: data.title });
+      
+      // Refresh shared users list after joining
+      try {
+        const refreshResponse = await fetch(`${API_BASE_URL}/api/documents/${data.documentId}`, {
+          headers: {
+            'Authorization': `Bearer ${userToken}`
+          }
+        });
+        if (refreshResponse.ok) {
+          const refreshedDoc = await refreshResponse.json();
+          setSharedUsers(refreshedDoc.permissions || []);
+          console.log('✅ Refreshed shared users list:', refreshedDoc.permissions);
+        }
+      } catch (refreshError) {
+        console.error('Error refreshing shared users:', refreshError);
+      }
       
       // Remove token from URL
       window.history.replaceState({}, '', `/document/${data.documentId}`);
     } catch (error) {
-      console.error('Error joining document:', error);
+      console.error('❌ Error joining document:', error);
       alert('Failed to join document: ' + error.message);
     }
-  };
-
-  // Check for share token in URL on mount
-  useEffect(() => {
-    const path = window.location.pathname;
-    const shareMatch = path.match(/\/share\/([a-f0-9]+)/);
-    if (shareMatch && shareMatch[1]) {
-      const token = shareMatch[1];
-      // Wait for user to login, then join
-      if (userToken) {
-        joinDocumentByToken(token).catch(err => {
-          console.error('Error joining document:', err);
-        });
-      }
-    }
   }, [userToken]);
+
+  // Check for share token in URL whenever userToken changes or on mount
+  useEffect(() => {
+    const checkShareToken = () => {
+      const path = window.location.pathname;
+      console.log('🔍 Checking URL for share token:', path);
+      const shareMatch = path.match(/\/share\/([a-f0-9]+)/);
+      if (shareMatch && shareMatch[1]) {
+        const token = shareMatch[1];
+        console.log('✅ Share token found in URL:', token);
+        // Wait for user to login, then join
+        if (userToken) {
+          console.log('🔗 User is logged in, joining document...', token);
+          joinDocumentByToken(token).catch(err => {
+            console.error('Error joining document:', err);
+            alert('Failed to join document: ' + err.message);
+          });
+        } else {
+          // User not logged in, show login screen
+          console.log('⚠️ User not logged in, showing login screen');
+          setScreen('login');
+        }
+      }
+    };
+
+    // Check immediately
+    checkShareToken();
+
+    // Also listen for URL changes (back/forward buttons)
+    const handlePopState = () => {
+      checkShareToken();
+    };
+    window.addEventListener('popstate', handlePopState);
+
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, [userToken, joinDocumentByToken]);
 
   // Login/Register screens
   if (screen === 'login' || screen === 'register') {

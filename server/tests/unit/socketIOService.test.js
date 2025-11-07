@@ -707,7 +707,7 @@ function createMockIO() {
   };
   const mockTo = jest.fn(() => mockRoomEmitter);
 
-  return {
+  const mockIOInstance = {
     emit: jest.fn(),
     to: mockTo,
     on: jest.fn(),
@@ -719,8 +719,10 @@ function createMockIO() {
       };
       const next = jest.fn();
       middleware(mockSocket, next);
-      return mockIO; // Allow chaining
+      return mockIOInstance; // Allow chaining
     }),
     _mockEmit: mockEmit, // Expose for testing
   };
+  
+  return mockIOInstance;
 }

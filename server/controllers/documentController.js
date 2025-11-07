@@ -1,5 +1,6 @@
 const documentService = require('../services/documentService');
 const permissionService = require('../services/permissionService');
+const socketIOService = require('../services/socketIOService');
 
 /**
  * Document Controller
@@ -150,11 +151,12 @@ class DocumentController {
     try {
       const { id } = req.params;
       const { email, username, role } = req.body; // Accept both email and username for backward compatibility
-      const requesterEmail = req.user?.email || req.user?.username || req.headers['x-username'] || 'anonymous';
+      const requesterEmail =
+        req.user?.email || req.user?.username || req.headers['x-username'] || 'anonymous';
 
       // Use email if provided, otherwise fall back to username for backward compatibility
       const userEmail = email || username;
-      
+
       if (!userEmail || !role) {
         return res.status(400).json({ error: 'Email and role are required' });
       }
@@ -163,6 +165,10 @@ class DocumentController {
       const normalizedEmail = userEmail.toLowerCase().trim();
 
       await permissionService.addPermission(id, normalizedEmail, role, requesterEmail);
+
+      // Notify the affected user via Socket.IO if they're currently viewing the document
+      socketIOService.notifyRoleChange(id, normalizedEmail, role);
+
       res.json({ message: 'Permission added successfully' });
     } catch (error) {
       console.error('Error adding permission:', error);
@@ -180,11 +186,12 @@ class DocumentController {
     try {
       const { id } = req.params;
       const { email, username } = req.body; // Accept both email and username for backward compatibility
-      const requesterEmail = req.user?.email || req.user?.username || req.headers['x-username'] || 'anonymous';
+      const requesterEmail =
+        req.user?.email || req.user?.username || req.headers['x-username'] || 'anonymous';
 
       // Use email if provided, otherwise fall back to username for backward compatibility
       const userEmail = email || username;
-      
+
       if (!userEmail) {
         return res.status(400).json({ error: 'Email is required' });
       }
@@ -193,6 +200,10 @@ class DocumentController {
       const normalizedEmail = userEmail.toLowerCase().trim();
 
       await permissionService.removePermission(id, normalizedEmail, requesterEmail);
+
+      // Notify the affected user via Socket.IO if they're currently viewing the document
+      socketIOService.notifyRoleChange(id, normalizedEmail, null); // null means no access
+
       res.json({ message: 'Permission removed successfully' });
     } catch (error) {
       console.error('Error removing permission:', error);
@@ -245,13 +256,20 @@ class DocumentController {
   async joinByShareToken(req, res) {
     try {
       const { token } = req.params;
-      const username = req.user?.username || req.headers['x-username'] || 'anonymous';
+      const userEmail =
+        req.user?.email || req.user?.username || req.headers['x-username'] || 'anonymous';
 
-      if (!username || username === 'anonymous') {
-        return res.status(400).json({ error: 'Username is required' });
+      if (!userEmail || userEmail === 'anonymous') {
+        return res.status(400).json({ error: 'Authentication required' });
       }
 
-      const { document, access } = await documentService.joinDocumentByShareToken(token, username);
+      // Normalize email to lowercase
+      const normalizedEmail = userEmail.toLowerCase().trim();
+
+      const { document, access } = await documentService.joinDocumentByShareToken(
+        token,
+        normalizedEmail
+      );
 
       res.json({
         documentId: document._id.toString(),
