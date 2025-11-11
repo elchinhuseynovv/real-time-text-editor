@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { io } from 'socket.io-client';
-import { MessageSquare, History, Users, Save, Download, Plus, FileText, Clock, ArrowLeft, Trash2, Share2, Copy, Eye, Edit, LogOut } from 'lucide-react';
+import { MessageSquare, Undo, Redo, Users, Save, Download, Plus, FileText, Clock, ArrowLeft, Trash2, Share2, Copy, Eye, Edit, LogOut, Sun, Moon } from 'lucide-react';
+import { Document, Packer, Paragraph, TextRun, AlignmentType } from 'docx';
+import { saveAs } from 'file-saver';
 import './App.css';
 
 // API base URL from environment or default - defined outside component to avoid re-creation
@@ -17,7 +19,8 @@ function App() {
   const [newMessage, setNewMessage] = useState('');
   const [isConnected, setIsConnected] = useState(false);
   const [showChat, setShowChat] = useState(false);
-  const [showHistory, setShowHistory] = useState(false);
+  const [undoStack, setUndoStack] = useState([]);
+  const [redoStack, setRedoStack] = useState([]);
   const [currentUser, setCurrentUser] = useState(null);
   const [userToken, setUserToken] = useState(null);
   const [userInfo, setUserInfo] = useState(null); // { id, name, email }
@@ -43,16 +46,25 @@ function App() {
   const [unreadMessages, setUnreadMessages] = useState(0); // Unread message count
   const [savedContent, setSavedContent] = useState(''); // Track saved content
   const [savedTitle, setSavedTitle] = useState(''); // Track saved title
+  const [theme, setTheme] = useState('dark'); // 'dark' or 'light'
   
   // Refs for Socket.IO and text editor
   const socket = useRef(null);
-  const textareaRef = useRef(null);
+  const editorRef = useRef(null); // Changed from textareaRef to editorRef for contenteditable
   const saveStatusTimeout = useRef(null);
   const isMountedRef = useRef(true);
   const handleServerMessageRef = useRef(null); // Ref to latest handleServerMessage
   const documentChangeTimeout = useRef(null); // Debounce timer for document changes
   const documentContentRef = useRef(''); // Ref to track current document content
   const documentTitleRef = useRef(''); // Ref to track current document title
+  const isTyping = useRef(false); // Track if user is currently typing
+
+  // Initialize theme from localStorage
+  useEffect(() => {
+    const savedTheme = localStorage.getItem('collabEdit_theme') || 'dark';
+    setTheme(savedTheme);
+    document.documentElement.setAttribute('data-theme', savedTheme);
+  }, []);
 
   // Initialize from localStorage and URL on mount
   useEffect(() => {
@@ -114,7 +126,7 @@ function App() {
   useEffect(() => {
     if (screen !== 'login') {
       localStorage.setItem('collabEdit_screen', screen);
-    }
+      }
   }, [screen]);
   
   useEffect(() => {
@@ -172,7 +184,7 @@ function App() {
     } finally {
       if (isMountedRef.current) {
       setLoadingDocuments(false);
-      }
+    }
     }
   }, [userToken]);
 
@@ -181,6 +193,7 @@ function App() {
     switch(type) {
       case 'init':
         if (data.document) {
+          isServerUpdateRef.current = true;
           setDocumentContent(data.document.content || '');
           setDocumentTitle(data.document.title || 'Untitled Document');
           // Update saved state
@@ -195,6 +208,7 @@ function App() {
       case 'document_update':
         // Update document content immediately when received from Socket.IO
         if (data.content !== undefined) {
+          isServerUpdateRef.current = true;
           setDocumentContent(data.content);
           // Don't update savedContent here - only update on save or init
         }
@@ -227,7 +241,7 @@ function App() {
         if (saveStatusTimeout.current) {
           clearTimeout(saveStatusTimeout.current);
         }
-        setSaveStatus('✅ Saved successfully!');
+        setSaveStatus('✅ Saved!');
         if (data.documentId) {
           const newDocId = data.documentId;
           console.log('Current documentId:', documentId, 'New documentId:', newDocId);
@@ -243,13 +257,13 @@ function App() {
           // Update URL
           window.history.pushState({}, '', `/document/${newDocId}`);
           
-          // Update saved state using refs to get current values
-          setSavedContent(documentContentRef.current);
-          setSavedTitle(documentTitleRef.current);
-          
           // Note: Server will send 'init' message automatically after creating new document
           // so we don't need to send set_document_id here
         }
+        
+        // Update saved state using refs to get current values
+        setSavedContent(documentContentRef.current);
+        setSavedTitle(documentTitleRef.current);
         saveStatusTimeout.current = setTimeout(() => {
           if (isMountedRef.current) {
             setSaveStatus('');
@@ -484,6 +498,70 @@ function App() {
     };
   }, [userToken, screen, connectToServer]);
 
+  // Track if update is from server
+  const isServerUpdateRef = useRef(false);
+  
+  // Initialize editor content when ref is ready
+  useEffect(() => {
+    if (editorRef.current && screen === 'editor' && !editorRef.current.innerHTML && documentContent) {
+      editorRef.current.innerHTML = documentContent;
+    }
+  }, [screen, documentContent]);
+  
+  // Update contenteditable div when document content changes from server
+  useEffect(() => {
+    if (editorRef.current && isServerUpdateRef.current && documentContent !== editorRef.current.innerHTML) {
+      // Save cursor position
+      const selection = window.getSelection();
+      let cursorPosition = 0;
+      
+      if (selection.rangeCount > 0) {
+        const range = selection.getRangeAt(0);
+        const preCaretRange = range.cloneRange();
+        preCaretRange.selectNodeContents(editorRef.current);
+        preCaretRange.setEnd(range.endContainer, range.endOffset);
+        cursorPosition = preCaretRange.toString().length;
+      }
+      
+      // Update content
+      editorRef.current.innerHTML = documentContent;
+      
+      // Restore cursor position
+      try {
+        const textNodes = [];
+        const walker = document.createTreeWalker(
+          editorRef.current,
+          NodeFilter.SHOW_TEXT,
+          null
+        );
+        
+        let node;
+        while (node = walker.nextNode()) {
+          textNodes.push(node);
+        }
+        
+        let currentPos = 0;
+        for (const textNode of textNodes) {
+          const textLength = textNode.textContent.length;
+          if (currentPos + textLength >= cursorPosition) {
+            const offset = cursorPosition - currentPos;
+            const newRange = document.createRange();
+            newRange.setStart(textNode, Math.min(offset, textLength));
+            newRange.collapse(true);
+            selection.removeAllRanges();
+            selection.addRange(newRange);
+            break;
+          }
+          currentPos += textLength;
+        }
+      } catch (e) {
+        // Cursor restoration failed, ignore
+      }
+      
+      isServerUpdateRef.current = false;
+    }
+  }, [documentContent]);
+  
   // Send document ID when connection is ready and we have a document ID
   useEffect(() => {
     if (isConnected && documentId && socket.current && socket.current.connected) {
@@ -570,10 +648,11 @@ function App() {
       
       // Set all state from the fetched document
       if (isMountedRef.current) {
-        setDocumentContent(fullDoc.content || '');
-        setDocumentTitle(fullDoc.title || 'Untitled Document');
-        setDocumentId(fullDoc._id);
-        setMessages([]);
+        isServerUpdateRef.current = true;
+      setDocumentContent(fullDoc.content || '');
+      setDocumentTitle(fullDoc.title || 'Untitled Document');
+      setDocumentId(fullDoc._id);
+      setMessages([]);
         
         // Update saved state
         setSavedContent(fullDoc.content || '');
@@ -584,9 +663,9 @@ function App() {
         
         // Update URL
         window.history.pushState({}, '', `/document/${fullDoc._id}`);
-        
-        // Switch to editor after state is set
-        setScreen('editor');
+      
+      // Switch to editor after state is set
+      setScreen('editor');
       }
       
     } catch (error) {
@@ -668,13 +747,13 @@ function App() {
 
       if (!response.ok) {
         throw new Error(data.error || 'Registration failed');
-      }
+    }
 
       // Save token and user info
       setUserToken(data.token);
       setUserInfo(data.user);
       setCurrentUser(data.user.email);
-      setScreen('documents');
+    setScreen('documents');
       
       // Clear form
       setRegisterName('');
@@ -737,7 +816,7 @@ function App() {
 
   // Logout function
   const handleLogout = async () => {
-    try {
+        try {
       // Call logout endpoint if token exists
       if (userToken) {
         await fetch(`${API_BASE_URL}/api/auth/logout`, {
@@ -747,7 +826,7 @@ function App() {
           }
         }).catch(err => console.error('Logout API error:', err));
       }
-    } catch (error) {
+        } catch (error) {
       console.error('Logout error:', error);
     } finally {
       // Close Socket.IO connection
@@ -772,7 +851,7 @@ function App() {
       setDocumentTitle('Untitled Document');
       setDocuments([]);
       setMessages([]);
-      setIsConnected(false);
+        setIsConnected(false);
       setUserRole(null);
       
       // Reset URL
@@ -790,34 +869,101 @@ function App() {
     setMessages([]);
     setScreen('documents');
     fetchDocuments();
+      };
+      
+  // Track last saved state for undo
+  const lastUndoStateRef = useRef('');
+  
+  // Toggle theme
+  const toggleTheme = () => {
+    const newTheme = theme === 'dark' ? 'light' : 'dark';
+    setTheme(newTheme);
+    localStorage.setItem('collabEdit_theme', newTheme);
+    document.documentElement.setAttribute('data-theme', newTheme);
   };
 
-  const handleDocumentChange = (e) => {
+  // Handle content change in contenteditable div
+  const handleDocumentChange = () => {
     // Check if user has write permission
-    if (userRole === 'viewer') {
-      return; // Don't allow changes for viewers
+    if (userRole === 'viewer' || !editorRef.current) {
+      return;
     }
     
-    const newContent = e.target.value;
+    const newContent = editorRef.current.innerHTML;
+    
+    // Save to undo stack if content has changed significantly
+    if (newContent !== lastUndoStateRef.current && documentContent !== newContent) {
+      // Only add to undo stack if it's been more than 1 second since last change or significant change
+      const shouldSaveUndo = !isTyping.current || 
+        Math.abs(newContent.length - documentContent.length) > 10;
+      
+      if (shouldSaveUndo && documentContent) {
+        setUndoStack(prev => {
+          const newStack = [...prev];
+          // Only add if different from last item
+          if (newStack.length === 0 || newStack[newStack.length - 1] !== documentContent) {
+            newStack.push(documentContent);
+            return newStack.slice(-20); // Keep last 20 states
+          }
+          return newStack;
+        });
+        setRedoStack([]); // Clear redo stack on new change
+        lastUndoStateRef.current = documentContent;
+      }
+    }
+    
     setDocumentContent(newContent);
     
     // Debounce Socket.IO updates to prevent lag when typing fast
-    // Clear previous timeout
     if (documentChangeTimeout.current) {
       clearTimeout(documentChangeTimeout.current);
     }
     
     // Send update via Socket.IO for real-time collaboration (debounced)
     if (socket.current && socket.current.connected && documentId) {
-      // Send immediately for small changes, debounce for larger content
-      const contentLength = newContent.length;
-      const delay = contentLength > 1000 ? 150 : 50; // Longer delay for larger documents
+      const delay = newContent.length > 1000 ? 150 : 50;
       
       documentChangeTimeout.current = setTimeout(() => {
         if (socket.current && socket.current.connected && documentId) {
           socket.current.emit('document_change', { content: newContent });
         }
       }, delay);
+    }
+  };
+  
+  // Undo function
+  const handleUndo = () => {
+    if (undoStack.length > 0 && editorRef.current) {
+      const previousState = undoStack[undoStack.length - 1];
+      setRedoStack(prev => [...prev, documentContent]);
+      setUndoStack(prev => prev.slice(0, -1));
+      
+      // Update the editor directly
+      editorRef.current.innerHTML = previousState;
+      setDocumentContent(previousState);
+          
+      // Send to server
+      if (socket.current && socket.current.connected && documentId) {
+        socket.current.emit('document_change', { content: previousState });
+          }
+        }
+  };
+  
+  // Redo function
+  const handleRedo = () => {
+    if (redoStack.length > 0 && editorRef.current) {
+      const nextState = redoStack[redoStack.length - 1];
+      setUndoStack(prev => [...prev, documentContent]);
+      setRedoStack(prev => prev.slice(0, -1));
+      
+      // Update the editor directly
+      editorRef.current.innerHTML = nextState;
+      setDocumentContent(nextState);
+      
+      // Send to server
+      if (socket.current && socket.current.connected && documentId) {
+        socket.current.emit('document_change', { content: nextState });
+      }
     }
   };
 
@@ -835,43 +981,46 @@ function App() {
     }
   };
 
+  // Format text using execCommand for rich text
   const formatText = (command) => {
-    const textarea = textareaRef.current;
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    const selectedText = documentContent.substring(start, end);
-    
-    if (!selectedText) {
-      alert('Please select text to format');
+    if (userRole === 'viewer' || !editorRef.current) {
       return;
     }
     
-    let formattedText = selectedText;
-    switch(command) {
-      case 'bold':
-        formattedText = `**${selectedText}**`;
-        break;
-      case 'italic':
-        formattedText = `*${selectedText}*`;
-        break;
-      case 'underline':
-        formattedText = `__${selectedText}__`;
-        break;
-      default:
-        break;
+    // Save current state to undo stack before formatting
+    if (documentContent) {
+      setUndoStack(prev => {
+        const newStack = [...prev];
+        if (newStack.length === 0 || newStack[newStack.length - 1] !== documentContent) {
+          newStack.push(documentContent);
+          return newStack.slice(-20);
+        }
+        return newStack;
+      });
+      setRedoStack([]);
     }
     
-    const newContent = documentContent.substring(0, start) + formattedText + documentContent.substring(end);
-    setDocumentContent(newContent);
+    // Focus editor and ensure selection
+    editorRef.current.focus();
     
-    if (socket.current && socket.current.connected && documentId) {
-      socket.current.emit('document_change', { content: newContent });
+    // Save selection
+    const selection = window.getSelection();
+    const range = selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
+    
+    // Execute command
+    try {
+      document.execCommand(command, false, null);
+    } catch (e) {
+      console.error('Format command failed:', e);
     }
     
-    setTimeout(() => {
-      textarea.focus();
-      textarea.setSelectionRange(start, start + formattedText.length);
-    }, 0);
+    // Restore selection if needed
+    if (range && selection.rangeCount === 0) {
+      selection.addRange(range);
+    }
+    
+    // Trigger change event to sync
+    setTimeout(() => handleDocumentChange(), 10);
   };
 
   const sendMessage = () => {
@@ -879,9 +1028,14 @@ function App() {
       const message = {
         id: Date.now(),
         text: newMessage.trim(),
+        user: currentUser || 'You',
         timestamp: new Date().toLocaleTimeString()
       };
       
+      // Add message to local state immediately
+      setMessages(prev => [...prev, message]);
+      
+      // Send to server (server will broadcast to others)
       socket.current.emit('chat_message', { message: message });
       
       setNewMessage('');
@@ -889,34 +1043,15 @@ function App() {
   };
 
   const saveDocument = () => {
-    // Prevent saving if documentId exists and we're trying to create a new document
-    if (documentId) {
-      // This is an existing document, just save it
-      console.log('Save button clicked for existing document');
-    } else {
-      // This is a new document, but check if we already have a pending save
-      console.log('Save button clicked for new document');
-    }
+    console.log('💾 Save button clicked', { 
+      documentId, 
+      isConnected, 
+      hasContent: documentContent?.length > 0,
+      contentLength: documentContent?.length 
+    });
     
-    if (socket.current && socket.current.connected) {
-      console.log('Sending save request to server...');
-      if (saveStatusTimeout.current) {
-        clearTimeout(saveStatusTimeout.current);
-      }
-      setSaveStatus('💾 Saving...');
-      
-      // Only send content/title if this is a new document (no documentId)
-      // For existing documents, server will use CRDT content
-      if (documentId) {
-        socket.current.emit('save_document', {});
-      } else {
-        socket.current.emit('save_document', {
-          content: documentContent,
-          title: documentTitle
-        });
-      }
-    } else {
-      console.error('Socket.IO not connected');
+    if (!socket.current || !socket.current.connected) {
+      console.error('❌ Socket.IO not connected');
       if (saveStatusTimeout.current) {
         clearTimeout(saveStatusTimeout.current);
       }
@@ -929,21 +1064,110 @@ function App() {
           }
         }, 3000);
       }
+      return;
     }
+    
+    // Clear any existing status timeout
+    if (saveStatusTimeout.current) {
+      clearTimeout(saveStatusTimeout.current);
+    }
+    setSaveStatus('💾 Saving...');
+    
+    // For existing documents, send current content to ensure it's saved
+    // For new documents, send content and title
+    if (documentId) {
+      console.log('📤 Saving existing document:', documentId);
+      socket.current.emit('save_document', {
+        content: documentContent, // Send current content
+        title: documentTitle       // Send current title
+      });
+    } else {
+      console.log('📤 Creating new document');
+      socket.current.emit('save_document', {
+        content: documentContent,
+        title: documentTitle
+      });
+    }
+    
+    // Set a timeout in case the server doesn't respond
+    saveStatusTimeout.current = setTimeout(() => {
+      if (isMountedRef.current && saveStatus === '💾 Saving...') {
+        console.warn('⚠️ Save timeout - no response from server');
+        setSaveStatus('⚠️ Save timeout');
+        setTimeout(() => {
+          if (isMountedRef.current) {
+            setSaveStatus('');
+          }
+        }, 2000);
+      }
+    }, 5000);
   };
 
-  const downloadDocument = () => {
+  // Download document as .docx
+  const downloadDocument = async () => {
     try {
-      const blob = new Blob([documentContent], { type: 'text/plain;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      const link = window.document.createElement('a');
-      link.href = url;
-      link.download = `${documentTitle || 'document'}.txt`;
+      // Convert HTML content to plain text with formatting
+      const tempDiv = document.createElement('div');
+      tempDiv.innerHTML = documentContent;
       
-      window.document.body.appendChild(link);
-      link.click();
-      window.document.body.removeChild(link);
-      URL.revokeObjectURL(url);
+      // Extract paragraphs
+      const paragraphs = [];
+      const lines = tempDiv.innerHTML.split(/<br\s*\/?>/gi).join('\n').split('\n');
+      
+      for (const line of lines) {
+        const lineDiv = document.createElement('div');
+        lineDiv.innerHTML = line;
+        
+        const textRuns = [];
+        const walker = document.createTreeWalker(
+          lineDiv,
+          NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT,
+          null
+        );
+        
+        let currentNode;
+        while (currentNode = walker.nextNode()) {
+          if (currentNode.nodeType === Node.TEXT_NODE && currentNode.textContent.trim()) {
+            const parent = currentNode.parentElement;
+            const tagName = parent?.tagName?.toLowerCase();
+            
+            textRuns.push(new TextRun({
+              text: currentNode.textContent,
+              bold: tagName === 'b' || tagName === 'strong',
+              italics: tagName === 'i' || tagName === 'em',
+              underline: tagName === 'u' ? {} : undefined
+            }));
+          }
+        }
+        
+        // If no text runs, add empty paragraph
+        if (textRuns.length === 0 && lineDiv.textContent.trim()) {
+          textRuns.push(new TextRun({ text: lineDiv.textContent }));
+        }
+        
+        if (textRuns.length > 0) {
+          paragraphs.push(new Paragraph({ children: textRuns }));
+        }
+      }
+      
+      // If no paragraphs, add empty document message
+      if (paragraphs.length === 0) {
+        paragraphs.push(new Paragraph({
+          children: [new TextRun({ text: tempDiv.textContent || 'Empty document' })]
+        }));
+      }
+      
+      // Create document
+      const doc = new Document({
+        sections: [{
+          properties: {},
+          children: paragraphs
+        }]
+      });
+      
+      // Generate and download
+      const blob = await Packer.toBlob(doc);
+      saveAs(blob, `${documentTitle || 'document'}.docx`);
       
       if (saveStatusTimeout.current) {
         clearTimeout(saveStatusTimeout.current);
@@ -1245,7 +1469,7 @@ function App() {
           </div>
           
           {screen === 'login' ? (
-            <div className="login-form">
+          <div className="login-form">
               <h2 style={{ marginBottom: '32px', fontSize: '24px', fontWeight: '600', textAlign: 'center', color: '#e2e8f0' }}>Sign in</h2>
               
               {authError && (
@@ -1263,13 +1487,13 @@ function App() {
               )}
               
               <form onSubmit={handleLogin}>
-                <div className="form-group">
+            <div className="form-group">
                   <label className="form-label">Email</label>
-                  <input
+              <input
                     type="email"
                     value={loginEmail}
                     onChange={(e) => setLoginEmail(e.target.value)}
-                    className="form-input"
+                className="form-input"
                     placeholder="your.email@example.com"
                     required
                     disabled={isLoading}
@@ -1287,10 +1511,10 @@ function App() {
                     required
                     disabled={isLoading}
                     minLength={6}
-                  />
-                </div>
-                
-                <button
+              />
+            </div>
+            
+            <button
                   type="submit"
                   className="btn-primary"
                   disabled={isLoading}
@@ -1305,7 +1529,7 @@ function App() {
                   Don't have an account?{' '}
                   <button
                     type="button"
-                    onClick={() => {
+              onClick={() => {
                       setScreen('register');
                       setAuthError('');
                     }}
@@ -1384,12 +1608,12 @@ function App() {
                 
                 <button
                   type="submit"
-                  className="btn-primary"
+              className="btn-primary"
                   disabled={isLoading}
                   style={{ width: '100%', marginTop: '32px' }}
-                >
+            >
                   {isLoading ? 'Signing up...' : 'Sign up'}
-                </button>
+            </button>
               </form>
               
               <div style={{ marginTop: '24px', textAlign: 'center' }}>
@@ -1413,7 +1637,7 @@ function App() {
                     Sign in
                   </button>
                 </p>
-              </div>
+          </div>
             </div>
           )}
         </div>
@@ -1436,10 +1660,10 @@ function App() {
               <p className="documents-subtitle">Welcome back, {userInfo?.name || currentUser}!</p>
             </div>
             <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-              <button onClick={createNewDocument} className="btn-new-document">
-                <Plus size={20} />
-                <span>New Document</span>
-              </button>
+            <button onClick={createNewDocument} className="btn-new-document">
+              <Plus size={20} />
+              <span>New Document</span>
+            </button>
               <button onClick={handleLogout} className="btn-logout" style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -1459,6 +1683,29 @@ function App() {
               >
                 <LogOut size={18} />
                 <span>Logout</span>
+              </button>
+              <button 
+              onClick={toggleTheme}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                background: theme === 'dark' ? '#3b82f6' : '#f59e0b',
+                color: 'white',
+                padding: '10px 20px',
+                border: 'none',
+                borderRadius: '8px',
+                fontSize: '14px',
+                fontWeight: '600',
+                cursor: 'pointer',
+                transition: 'all 0.2s'
+              }}
+              onMouseEnter={(e) => e.target.style.background = theme === 'dark' ? '#2563eb' : '#d97706'}
+              onMouseLeave={(e) => e.target.style.background = theme === 'dark' ? '#3b82f6' : '#f59e0b'}
+              title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+              >
+                {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
+                <span>{theme === 'dark' ? 'Light' : 'Dark'}</span>
               </button>
             </div>
           </div>
@@ -1495,39 +1742,39 @@ function App() {
                   }}>
                     Owned Documents
                   </h2>
-                  <div className="documents-grid">
+            <div className="documents-grid">
                     {ownedDocuments.map((doc) => (
-                      <div key={doc._id} className="document-card">
-                        <div className="document-card-header">
-                          <FileText size={24} className="document-icon" />
-                          <button 
-                            className="btn-delete-doc"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              deleteDocument(doc._id, doc.title, e);
-                            }}
-                            title="Delete document"
-                          >
-                            <Trash2 size={20} />
-                          </button>
-                        </div>
-                        <div className="document-card-body" onClick={() => openDocument(doc)}>
-                          <h3 className="document-card-title">{doc.title}</h3>
-                          <p className="document-card-preview">
-                            {doc.content ? doc.content.substring(0, 100) + (doc.content.length > 100 ? '...' : '') : 'Empty document'}
-                          </p>
-                        </div>
-                        <div className="document-card-footer" onClick={() => openDocument(doc)}>
-                          <div className="document-meta">
-                            <Clock size={14} />
-                            <span>{formatDate(doc.updatedAt)}</span>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
+                <div key={doc._id} className="document-card">
+                  <div className="document-card-header">
+                    <FileText size={24} className="document-icon" />
+                    <button 
+                      className="btn-delete-doc"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        deleteDocument(doc._id, doc.title, e);
+                      }}
+                      title="Delete document"
+                    >
+                      <Trash2 size={20} />
+                    </button>
+                  </div>
+                  <div className="document-card-body" onClick={() => openDocument(doc)}>
+                    <h3 className="document-card-title">{doc.title}</h3>
+                    <p className="document-card-preview">
+                      {doc.content ? doc.content.substring(0, 100) + (doc.content.length > 100 ? '...' : '') : 'Empty document'}
+                    </p>
+                  </div>
+                  <div className="document-card-footer" onClick={() => openDocument(doc)}>
+                    <div className="document-meta">
+                      <Clock size={14} />
+                      <span>{formatDate(doc.updatedAt)}</span>
+                    </div>
                   </div>
                 </div>
-              )}
+              ))}
+                  </div>
+            </div>
+          )}
 
               {/* Shared Documents Section */}
               {sharedDocuments.length > 0 && (
@@ -1628,11 +1875,16 @@ function App() {
               </span>
             )}
             
-            <button onClick={saveDocument} className="btn-save" disabled={
-              !isConnected || 
-              userRole === 'viewer' || 
-              (documentContent === savedContent && documentTitle === savedTitle && documentId)
-            }>
+            <button 
+              onClick={saveDocument} 
+              className="btn-save" 
+              disabled={!isConnected || userRole === 'viewer'}
+              title={
+                !isConnected ? 'Not connected to server' :
+                userRole === 'viewer' ? 'You don\'t have permission to save' :
+                'Save document to database'
+              }
+            >
               <Save className="icon" size={16} />
               <span>Save</span>
             </button>
@@ -1669,6 +1921,29 @@ function App() {
               <LogOut size={18} />
               <span>Logout</span>
             </button>
+            <button 
+            onClick={toggleTheme}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              background: theme === 'dark' ? '#3b82f6' : '#f59e0b',
+              color: 'white',
+              padding: '10px 20px',
+              border: 'none',
+              borderRadius: '8px',
+              fontSize: '14px',
+              fontWeight: '600',
+              cursor: 'pointer',
+              transition: 'all 0.2s'
+            }}
+            onMouseEnter={(e) => e.target.style.background = theme === 'dark' ? '#2563eb' : '#d97706'}
+            onMouseLeave={(e) => e.target.style.background = theme === 'dark' ? '#3b82f6' : '#f59e0b'}
+            title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+            >
+              {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
+              <span>{theme === 'dark' ? 'Light' : 'Dark'}</span>
+            </button>
           </div>
         </div>
       </header>
@@ -1703,9 +1978,11 @@ function App() {
           
           <div className="toolbar-divider"></div>
           
-          <button onClick={() => setShowHistory(!showHistory)} className="toolbar-btn">
-            <History className="icon" size={16} />
-            <span>History</span>
+          <button onClick={handleUndo} className="toolbar-btn" title="Undo" disabled={userRole === 'viewer' || undoStack.length === 0}>
+            <Undo className="icon" size={16} />
+          </button>
+          <button onClick={handleRedo} className="toolbar-btn" title="Redo" disabled={userRole === 'viewer' || redoStack.length === 0}>
+            <Redo className="icon" size={16} />
           </button>
           
           {users.length > 1 && (
@@ -1720,8 +1997,8 @@ function App() {
               className="toolbar-btn"
               style={{ position: 'relative' }}
             >
-              <MessageSquare className="icon" size={16} />
-              <span>Chat</span>
+            <MessageSquare className="icon" size={16} />
+            <span>Chat</span>
               {unreadMessages > 0 && (
                 <span style={{
                   position: 'absolute',
@@ -1741,7 +2018,7 @@ function App() {
                   {unreadMessages > 9 ? '9+' : unreadMessages}
                 </span>
               )}
-            </button>
+          </button>
           )}
         </div>
       </div>
@@ -1749,13 +2026,58 @@ function App() {
       <div className="main-content">
         <div className="editor-container">
           <div className="editor-wrapper">
-            <textarea
-              ref={textareaRef}
-              value={documentContent}
-              onChange={handleDocumentChange}
+            <div
+              ref={editorRef}
+              contentEditable={userRole !== 'viewer' && isConnected}
+              onInput={handleDocumentChange}
+              onKeyDown={(e) => {
+                // Handle keyboard shortcuts
+                if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+                  e.preventDefault();
+                  handleUndo();
+                  return;
+                }
+                if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
+                  e.preventDefault();
+                  handleRedo();
+                  return;
+                }
+                
+                isTyping.current = true;
+                // Clear typing flag after a delay
+                clearTimeout(window.typingTimeout);
+                window.typingTimeout = setTimeout(() => {
+                  isTyping.current = false;
+                }, 300);
+              }}
+              onPaste={(e) => {
+                // Save state before paste for undo
+                if (documentContent) {
+                  setUndoStack(prev => {
+                    const newStack = [...prev];
+                    if (newStack.length === 0 || newStack[newStack.length - 1] !== documentContent) {
+                      newStack.push(documentContent);
+                      return newStack.slice(-20);
+                    }
+                    return newStack;
+                  });
+                  setRedoStack([]);
+                }
+                
+                // Allow paste with formatting from Word or other sources
+                // The default behavior will preserve HTML formatting
+                // We just need to make sure it triggers the change handler
+                setTimeout(() => handleDocumentChange(), 10);
+              }}
               className="editor-textarea"
-              placeholder={userRole === 'viewer' ? 'You have read-only access to this document...' : 'Start typing your document...'}
-              disabled={!isConnected || userRole === 'viewer'}
+              suppressContentEditableWarning={true}
+              data-placeholder={userRole === 'viewer' ? 'You have read-only access to this document...' : 'Start typing your document...'}
+              style={{
+                outline: 'none',
+                minHeight: '100%',
+                cursor: userRole === 'viewer' ? 'not-allowed' : 'text',
+                whiteSpace: 'pre-wrap'
+              }}
             />
           </div>
         </div>
