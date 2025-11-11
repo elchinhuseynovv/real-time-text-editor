@@ -17,8 +17,8 @@ const server = http.createServer(app);
 // Initialize Socket.IO with CORS
 const io = new Server(server, {
   cors: {
-    origin: process.env.CLIENT_URL || process.env.CORS_ORIGIN || '*',
-    methods: ['GET', 'POST'],
+    origin: '*',
+    methods: ['GET', 'POST', 'DELETE'],
     credentials: true,
   },
   transports: ['websocket', 'polling'], // Support both transports
