@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { io } from 'socket.io-client';
-import { MessageSquare, Undo, Redo, Users, Save, Download, Plus, FileText, Clock, ArrowLeft, Trash2, Share2, Copy, Eye, Edit, LogOut } from 'lucide-react';
+import { MessageSquare, Undo, Redo, Users, Save, Download, Plus, FileText, Clock, ArrowLeft, Trash2, Share2, Copy, Eye, Edit, LogOut, Sun, Moon } from 'lucide-react';
 import { Document, Packer, Paragraph, TextRun, AlignmentType } from 'docx';
 import { saveAs } from 'file-saver';
 import './App.css';
@@ -46,6 +46,7 @@ function App() {
   const [unreadMessages, setUnreadMessages] = useState(0); // Unread message count
   const [savedContent, setSavedContent] = useState(''); // Track saved content
   const [savedTitle, setSavedTitle] = useState(''); // Track saved title
+  const [theme, setTheme] = useState('dark'); // 'dark' or 'light'
   
   // Refs for Socket.IO and text editor
   const socket = useRef(null);
@@ -57,6 +58,13 @@ function App() {
   const documentContentRef = useRef(''); // Ref to track current document content
   const documentTitleRef = useRef(''); // Ref to track current document title
   const isTyping = useRef(false); // Track if user is currently typing
+
+  // Initialize theme from localStorage
+  useEffect(() => {
+    const savedTheme = localStorage.getItem('collabEdit_theme') || 'dark';
+    setTheme(savedTheme);
+    document.documentElement.setAttribute('data-theme', savedTheme);
+  }, []);
 
   // Initialize from localStorage and URL on mount
   useEffect(() => {
@@ -866,6 +874,14 @@ function App() {
   // Track last saved state for undo
   const lastUndoStateRef = useRef('');
   
+  // Toggle theme
+  const toggleTheme = () => {
+    const newTheme = theme === 'dark' ? 'light' : 'dark';
+    setTheme(newTheme);
+    localStorage.setItem('collabEdit_theme', newTheme);
+    document.documentElement.setAttribute('data-theme', newTheme);
+  };
+  
   // Handle content change in contenteditable div
   const handleDocumentChange = () => {
     // Check if user has write permission
@@ -1651,6 +1667,29 @@ function App() {
                 <LogOut size={18} />
                 <span>Logout</span>
               </button>
+              <button 
+              onClick={toggleTheme}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                background: theme === 'dark' ? '#3b82f6' : '#f59e0b',
+                color: 'white',
+                padding: '10px 20px',
+                border: 'none',
+                borderRadius: '8px',
+                fontSize: '14px',
+                fontWeight: '600',
+                cursor: 'pointer',
+                transition: 'all 0.2s'
+              }}
+              onMouseEnter={(e) => e.target.style.background = theme === 'dark' ? '#2563eb' : '#d97706'}
+              onMouseLeave={(e) => e.target.style.background = theme === 'dark' ? '#3b82f6' : '#f59e0b'}
+              title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+              >
+                {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
+                <span>{theme === 'dark' ? 'Light' : 'Dark'}</span>
+              </button>
             </div>
           </div>
         </div>
@@ -1859,6 +1898,29 @@ function App() {
             >
               <LogOut size={18} />
               <span>Logout</span>
+            </button>
+            <button 
+            onClick={toggleTheme}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              background: theme === 'dark' ? '#3b82f6' : '#f59e0b',
+              color: 'white',
+              padding: '10px 20px',
+              border: 'none',
+              borderRadius: '8px',
+              fontSize: '14px',
+              fontWeight: '600',
+              cursor: 'pointer',
+              transition: 'all 0.2s'
+            }}
+            onMouseEnter={(e) => e.target.style.background = theme === 'dark' ? '#2563eb' : '#d97706'}
+            onMouseLeave={(e) => e.target.style.background = theme === 'dark' ? '#3b82f6' : '#f59e0b'}
+            title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+            >
+              {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
+              <span>{theme === 'dark' ? 'Light' : 'Dark'}</span>
             </button>
           </div>
         </div>
