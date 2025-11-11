@@ -24,13 +24,6 @@ This will start:
 - **Server** on port `4000`
 - **Client** on port `5173`
 
-### Production Mode
-
-```bash
-# Build and start with production configuration
-docker-compose -f docker-compose.prod.yml up --build -d
-```
-
 ## Environment Variables
 
 ### Server (.env.example)
@@ -44,7 +37,7 @@ CORS_ORIGIN=http://localhost:5173
 ### Client (.env.example)
 ```bash
 VITE_API_URL=http://localhost:4000
-VITE_WS_URL=ws://localhost:4000
+VITE_SOCKET_URL=http://localhost:4000
 ```
 
 ## Docker Commands
@@ -85,8 +78,8 @@ docker run -p 4000:4000 --env-file .env collaborative-editor-server
 ### Build Client Only
 ```bash
 cd client
-docker build -t collaborative-editor-client --build-arg VITE_API_URL=http://localhost:4000 --build-arg VITE_WS_URL=ws://localhost:4000 .
-docker run -p 80:80 collaborative-editor-client
+docker build -t collaborative-editor-client --build-arg VITE_API_URL=http://localhost:4000 --build-arg VITE_SOCKET_URL=http://localhost:4000 .
+docker run -p 5173:5173 collaborative-editor-client
 ```
 
 ## Health Checks
@@ -114,7 +107,7 @@ ports:
 ### Client Can't Connect to Server
 Ensure environment variables are set correctly:
 - `VITE_API_URL` should point to server URL
-- `VITE_WS_URL` should point to WebSocket URL
+- `VITE_SOCKET_URL` should point to WebSocket URL
 - For Docker, use container names or host IP
 
 ### Rebuild After Code Changes
@@ -128,23 +121,27 @@ docker-compose build server && docker-compose up -d server
 
 ## Production Deployment
 
-For production, update environment variables:
+For production, update environment variables in `docker-compose.yml`:
 
-1. **Server `.env`:**
-   ```bash
-   MONGODB_URI=mongodb://mongodb:27017/collaborative-editor
-   CLIENT_URL=https://yourdomain.com
-   CORS_ORIGIN=https://yourdomain.com
+1. **Server environment:**
+   ```yaml
+   server:
+     environment:
+       - MONGODB_URI=mongodb://mongodb:27017/collaborative-editor
+       - CLIENT_URL=https://yourdomain.com
+       - CORS_ORIGIN=https://yourdomain.com
+       - JWT_SECRET=your-secure-secret-key
+       - NODE_ENV=production
    ```
 
 2. **Client build args:**
-   ```bash
-   docker build --build-arg VITE_API_URL=https://api.yourdomain.com \
-                --build-arg VITE_WS_URL=wss://api.yourdomain.com \
-                -t collaborative-editor-client .
+   ```yaml
+   client:
+     build:
+       args:
+         - VITE_API_URL=https://api.yourdomain.com
+         - VITE_SOCKET_URL=https://api.yourdomain.com
    ```
-
-3. Use `docker-compose.prod.yml` for production configuration.
 
 ## Volumes
 
