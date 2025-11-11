@@ -126,7 +126,7 @@ function App() {
   useEffect(() => {
     if (screen !== 'login') {
       localStorage.setItem('collabEdit_screen', screen);
-    }
+      }
   }, [screen]);
   
   useEffect(() => {
@@ -184,7 +184,7 @@ function App() {
     } finally {
       if (isMountedRef.current) {
       setLoadingDocuments(false);
-      }
+    }
     }
   }, [userToken]);
 
@@ -241,7 +241,7 @@ function App() {
         if (saveStatusTimeout.current) {
           clearTimeout(saveStatusTimeout.current);
         }
-        setSaveStatus('✅ Saved successfully!');
+        setSaveStatus('✅ Saved!');
         if (data.documentId) {
           const newDocId = data.documentId;
           console.log('Current documentId:', documentId, 'New documentId:', newDocId);
@@ -257,13 +257,13 @@ function App() {
           // Update URL
           window.history.pushState({}, '', `/document/${newDocId}`);
           
-          // Update saved state using refs to get current values
-          setSavedContent(documentContentRef.current);
-          setSavedTitle(documentTitleRef.current);
-          
           // Note: Server will send 'init' message automatically after creating new document
           // so we don't need to send set_document_id here
         }
+        
+        // Update saved state using refs to get current values
+        setSavedContent(documentContentRef.current);
+        setSavedTitle(documentTitleRef.current);
         saveStatusTimeout.current = setTimeout(() => {
           if (isMountedRef.current) {
             setSaveStatus('');
@@ -649,10 +649,10 @@ function App() {
       // Set all state from the fetched document
       if (isMountedRef.current) {
         isServerUpdateRef.current = true;
-        setDocumentContent(fullDoc.content || '');
-        setDocumentTitle(fullDoc.title || 'Untitled Document');
-        setDocumentId(fullDoc._id);
-        setMessages([]);
+      setDocumentContent(fullDoc.content || '');
+      setDocumentTitle(fullDoc.title || 'Untitled Document');
+      setDocumentId(fullDoc._id);
+      setMessages([]);
         
         // Update saved state
         setSavedContent(fullDoc.content || '');
@@ -663,9 +663,9 @@ function App() {
         
         // Update URL
         window.history.pushState({}, '', `/document/${fullDoc._id}`);
-        
-        // Switch to editor after state is set
-        setScreen('editor');
+      
+      // Switch to editor after state is set
+      setScreen('editor');
       }
       
     } catch (error) {
@@ -747,13 +747,13 @@ function App() {
 
       if (!response.ok) {
         throw new Error(data.error || 'Registration failed');
-      }
+    }
 
       // Save token and user info
       setUserToken(data.token);
       setUserInfo(data.user);
       setCurrentUser(data.user.email);
-      setScreen('documents');
+    setScreen('documents');
       
       // Clear form
       setRegisterName('');
@@ -816,7 +816,7 @@ function App() {
 
   // Logout function
   const handleLogout = async () => {
-    try {
+        try {
       // Call logout endpoint if token exists
       if (userToken) {
         await fetch(`${API_BASE_URL}/api/auth/logout`, {
@@ -826,7 +826,7 @@ function App() {
           }
         }).catch(err => console.error('Logout API error:', err));
       }
-    } catch (error) {
+        } catch (error) {
       console.error('Logout error:', error);
     } finally {
       // Close Socket.IO connection
@@ -851,7 +851,7 @@ function App() {
       setDocumentTitle('Untitled Document');
       setDocuments([]);
       setMessages([]);
-      setIsConnected(false);
+        setIsConnected(false);
       setUserRole(null);
       
       // Reset URL
@@ -869,8 +869,8 @@ function App() {
     setMessages([]);
     setScreen('documents');
     fetchDocuments();
-  };
-
+      };
+      
   // Track last saved state for undo
   const lastUndoStateRef = useRef('');
   
@@ -881,7 +881,7 @@ function App() {
     localStorage.setItem('collabEdit_theme', newTheme);
     document.documentElement.setAttribute('data-theme', newTheme);
   };
-  
+
   // Handle content change in contenteditable div
   const handleDocumentChange = () => {
     // Check if user has write permission
@@ -941,12 +941,12 @@ function App() {
       // Update the editor directly
       editorRef.current.innerHTML = previousState;
       setDocumentContent(previousState);
-      
+          
       // Send to server
       if (socket.current && socket.current.connected && documentId) {
         socket.current.emit('document_change', { content: previousState });
-      }
-    }
+          }
+        }
   };
   
   // Redo function
@@ -1043,34 +1043,15 @@ function App() {
   };
 
   const saveDocument = () => {
-    // Prevent saving if documentId exists and we're trying to create a new document
-    if (documentId) {
-      // This is an existing document, just save it
-      console.log('Save button clicked for existing document');
-    } else {
-      // This is a new document, but check if we already have a pending save
-      console.log('Save button clicked for new document');
-    }
+    console.log('💾 Save button clicked', { 
+      documentId, 
+      isConnected, 
+      hasContent: documentContent?.length > 0,
+      contentLength: documentContent?.length 
+    });
     
-    if (socket.current && socket.current.connected) {
-      console.log('Sending save request to server...');
-      if (saveStatusTimeout.current) {
-        clearTimeout(saveStatusTimeout.current);
-      }
-      setSaveStatus('💾 Saving...');
-      
-      // Only send content/title if this is a new document (no documentId)
-      // For existing documents, server will use CRDT content
-      if (documentId) {
-        socket.current.emit('save_document', {});
-      } else {
-        socket.current.emit('save_document', {
-          content: documentContent,
-          title: documentTitle
-        });
-      }
-    } else {
-      console.error('Socket.IO not connected');
+    if (!socket.current || !socket.current.connected) {
+      console.error('❌ Socket.IO not connected');
       if (saveStatusTimeout.current) {
         clearTimeout(saveStatusTimeout.current);
       }
@@ -1083,7 +1064,43 @@ function App() {
           }
         }, 3000);
       }
+      return;
     }
+    
+    // Clear any existing status timeout
+    if (saveStatusTimeout.current) {
+      clearTimeout(saveStatusTimeout.current);
+    }
+    setSaveStatus('💾 Saving...');
+    
+    // For existing documents, send current content to ensure it's saved
+    // For new documents, send content and title
+    if (documentId) {
+      console.log('📤 Saving existing document:', documentId);
+      socket.current.emit('save_document', {
+        content: documentContent, // Send current content
+        title: documentTitle       // Send current title
+      });
+    } else {
+      console.log('📤 Creating new document');
+      socket.current.emit('save_document', {
+        content: documentContent,
+        title: documentTitle
+      });
+    }
+    
+    // Set a timeout in case the server doesn't respond
+    saveStatusTimeout.current = setTimeout(() => {
+      if (isMountedRef.current && saveStatus === '💾 Saving...') {
+        console.warn('⚠️ Save timeout - no response from server');
+        setSaveStatus('⚠️ Save timeout');
+        setTimeout(() => {
+          if (isMountedRef.current) {
+            setSaveStatus('');
+          }
+        }, 2000);
+      }
+    }, 5000);
   };
 
   // Download document as .docx
@@ -1164,7 +1181,7 @@ function App() {
     } catch (error) {
       console.error('Download error:', error);
       if (isMountedRef.current) {
-        alert('Failed to download document: ' + error.message);
+      alert('Failed to download document: ' + error.message);
       }
     }
   };
@@ -1452,7 +1469,7 @@ function App() {
           </div>
           
           {screen === 'login' ? (
-            <div className="login-form">
+          <div className="login-form">
               <h2 style={{ marginBottom: '32px', fontSize: '24px', fontWeight: '600', textAlign: 'center', color: '#e2e8f0' }}>Sign in</h2>
               
               {authError && (
@@ -1470,13 +1487,13 @@ function App() {
               )}
               
               <form onSubmit={handleLogin}>
-                <div className="form-group">
+            <div className="form-group">
                   <label className="form-label">Email</label>
-                  <input
+              <input
                     type="email"
                     value={loginEmail}
                     onChange={(e) => setLoginEmail(e.target.value)}
-                    className="form-input"
+                className="form-input"
                     placeholder="your.email@example.com"
                     required
                     disabled={isLoading}
@@ -1494,10 +1511,10 @@ function App() {
                     required
                     disabled={isLoading}
                     minLength={6}
-                  />
-                </div>
-                
-                <button
+              />
+            </div>
+            
+            <button
                   type="submit"
                   className="btn-primary"
                   disabled={isLoading}
@@ -1512,7 +1529,7 @@ function App() {
                   Don't have an account?{' '}
                   <button
                     type="button"
-                    onClick={() => {
+              onClick={() => {
                       setScreen('register');
                       setAuthError('');
                     }}
@@ -1591,12 +1608,12 @@ function App() {
                 
                 <button
                   type="submit"
-                  className="btn-primary"
+              className="btn-primary"
                   disabled={isLoading}
                   style={{ width: '100%', marginTop: '32px' }}
-                >
+            >
                   {isLoading ? 'Signing up...' : 'Sign up'}
-                </button>
+            </button>
               </form>
               
               <div style={{ marginTop: '24px', textAlign: 'center' }}>
@@ -1620,7 +1637,7 @@ function App() {
                     Sign in
                   </button>
                 </p>
-              </div>
+          </div>
             </div>
           )}
         </div>
@@ -1643,10 +1660,10 @@ function App() {
               <p className="documents-subtitle">Welcome back, {userInfo?.name || currentUser}!</p>
             </div>
             <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-              <button onClick={createNewDocument} className="btn-new-document">
-                <Plus size={20} />
-                <span>New Document</span>
-              </button>
+            <button onClick={createNewDocument} className="btn-new-document">
+              <Plus size={20} />
+              <span>New Document</span>
+            </button>
               <button onClick={handleLogout} className="btn-logout" style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -1725,39 +1742,39 @@ function App() {
                   }}>
                     Owned Documents
                   </h2>
-                  <div className="documents-grid">
+            <div className="documents-grid">
                     {ownedDocuments.map((doc) => (
-                      <div key={doc._id} className="document-card">
-                        <div className="document-card-header">
-                          <FileText size={24} className="document-icon" />
-                          <button 
-                            className="btn-delete-doc"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              deleteDocument(doc._id, doc.title, e);
-                            }}
-                            title="Delete document"
-                          >
-                            <Trash2 size={20} />
-                          </button>
-                        </div>
-                        <div className="document-card-body" onClick={() => openDocument(doc)}>
-                          <h3 className="document-card-title">{doc.title}</h3>
-                          <p className="document-card-preview">
-                            {doc.content ? doc.content.substring(0, 100) + (doc.content.length > 100 ? '...' : '') : 'Empty document'}
-                          </p>
-                        </div>
-                        <div className="document-card-footer" onClick={() => openDocument(doc)}>
-                          <div className="document-meta">
-                            <Clock size={14} />
-                            <span>{formatDate(doc.updatedAt)}</span>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
+                <div key={doc._id} className="document-card">
+                  <div className="document-card-header">
+                    <FileText size={24} className="document-icon" />
+                    <button 
+                      className="btn-delete-doc"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        deleteDocument(doc._id, doc.title, e);
+                      }}
+                      title="Delete document"
+                    >
+                      <Trash2 size={20} />
+                    </button>
+                  </div>
+                  <div className="document-card-body" onClick={() => openDocument(doc)}>
+                    <h3 className="document-card-title">{doc.title}</h3>
+                    <p className="document-card-preview">
+                      {doc.content ? doc.content.substring(0, 100) + (doc.content.length > 100 ? '...' : '') : 'Empty document'}
+                    </p>
+                  </div>
+                  <div className="document-card-footer" onClick={() => openDocument(doc)}>
+                    <div className="document-meta">
+                      <Clock size={14} />
+                      <span>{formatDate(doc.updatedAt)}</span>
+                    </div>
                   </div>
                 </div>
-              )}
+              ))}
+                  </div>
+            </div>
+          )}
 
               {/* Shared Documents Section */}
               {sharedDocuments.length > 0 && (
@@ -1858,11 +1875,16 @@ function App() {
               </span>
             )}
             
-            <button onClick={saveDocument} className="btn-save" disabled={
-              !isConnected || 
-              userRole === 'viewer' || 
-              (documentContent === savedContent && documentTitle === savedTitle && documentId)
-            }>
+            <button 
+              onClick={saveDocument} 
+              className="btn-save" 
+              disabled={!isConnected || userRole === 'viewer'}
+              title={
+                !isConnected ? 'Not connected to server' :
+                userRole === 'viewer' ? 'You don\'t have permission to save' :
+                'Save document to database'
+              }
+            >
               <Save className="icon" size={16} />
               <span>Save</span>
             </button>
@@ -1975,8 +1997,8 @@ function App() {
               className="toolbar-btn"
               style={{ position: 'relative' }}
             >
-              <MessageSquare className="icon" size={16} />
-              <span>Chat</span>
+            <MessageSquare className="icon" size={16} />
+            <span>Chat</span>
               {unreadMessages > 0 && (
                 <span style={{
                   position: 'absolute',
@@ -1996,7 +2018,7 @@ function App() {
                   {unreadMessages > 9 ? '9+' : unreadMessages}
                 </span>
               )}
-            </button>
+          </button>
           )}
         </div>
       </div>

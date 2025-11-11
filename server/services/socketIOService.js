@@ -476,12 +476,25 @@ class SocketIOService {
     }
 
     try {
-      const content = crdtService.getContent(client.documentId);
+      // Use provided content or fall back to CRDT content
+      const content = data.content || crdtService.getContent(client.documentId);
+      
+      // Update CRDT with latest content
+      if (data.content) {
+        crdtService.setContent(client.documentId, data.content);
+      }
+      
+      // Update document content in database
       const document = await documentService.updateDocumentContent(
         client.documentId,
         content,
         client.username
       );
+      
+      // Update title if provided
+      if (data.title) {
+        await documentService.updateDocumentTitle(client.documentId, data.title);
+      }
 
       this.sendToClient(client.socket, 'save_success', {
         message: 'Document saved successfully!',
@@ -499,7 +512,7 @@ class SocketIOService {
         clientId
       );
 
-      console.log('✅ Document saved:', client.documentId);
+      console.log('✅ Document saved:', client.documentId, `(${content?.length || 0} chars)`);
     } catch (error) {
       console.error('Error saving document:', error);
       this.sendError(client.socket, 'Failed to save document: ' + error.message);
