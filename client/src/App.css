@@ -593,6 +593,9 @@ body {
   color: #e2e8f0;
   resize: none;
   font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-wrap: break-word;
 }
 
 .editor-textarea::placeholder {
@@ -601,6 +604,47 @@ body {
 
 .editor-textarea:focus {
   outline: none;
+}
+
+.editor-textarea:empty:before {
+  content: attr(data-placeholder);
+  color: #64748b;
+  pointer-events: none;
+  display: block;
+}
+
+.editor-textarea[contenteditable="false"] {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+/* Rich text formatting styles */
+.editor-textarea b,
+.editor-textarea strong {
+  font-weight: 700;
+}
+
+.editor-textarea i,
+.editor-textarea em {
+  font-style: italic;
+}
+
+.editor-textarea u {
+  text-decoration: underline;
+}
+
+.editor-textarea p {
+  margin: 0 0 8px 0;
+}
+
+.editor-textarea div {
+  margin: 0;
+}
+
+/* Preserve pasted formatting */
+.editor-textarea * {
+  color: inherit;
+  font-family: inherit;
 }
 
 /* Chat Sidebar */
