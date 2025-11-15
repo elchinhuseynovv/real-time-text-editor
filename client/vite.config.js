@@ -8,11 +8,6 @@ export default defineConfig({
     host: true,
     port: 5173,
     strictPort: true,
-    // TODO: remove this once demo is done
-    // hmr: {
-    //   host: 'e8da0fb9bf43.ngrok-free.app', // Your ngrok host
-    //   clientPort: 443, // HTTPS port
-    // },
   },
   build: {
     outDir: 'dist',

@@ -30,8 +30,8 @@ services:
     environment:
       - PORT=4000
       - MONGODB_URI=mongodb://mongodb:27017/collaborative-editor
-      - CLIENT_URL=http://localhost:5173
-      - CORS_ORIGIN=http://localhost:5173,http://localhost:80
+      - CLIENT_URL=${CLIENT_URL:-http://localhost:5173}
+      - CORS_ORIGIN=*
       - JWT_SECRET=${JWT_SECRET:-your-secret-key-change-in-production}
     depends_on:
       mongodb:
@@ -44,8 +44,8 @@ services:
       context: ./client
       dockerfile: Dockerfile
       args:
-        - VITE_API_URL=http://localhost:4000
-        - VITE_SOCKET_URL=http://localhost:4000
+        - VITE_API_URL=${VITE_API_URL:-http://localhost:4000}
+        - VITE_SOCKET_URL=${VITE_SOCKET_URL:-http://localhost:4000}
     container_name: collaborative-editor-client
     restart: unless-stopped
     ports:
