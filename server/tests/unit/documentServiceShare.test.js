@@ -15,8 +15,12 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await Document.deleteMany({});
-  // Clear CRDT state
-  crdtService.clearDocument = jest.fn();
+  crdtService.documentStates.clear();
+});
+
+afterEach(async () => {
+  await Document.deleteMany({});
+  crdtService.documentStates.clear();
 });
 
 describe('DocumentService - Share Links', () => {
@@ -36,6 +40,7 @@ describe('DocumentService - Share Links', () => {
       expect(token.length).toBeGreaterThan(0);
 
       const updated = await Document.findById(doc._id);
+      expect(updated).toBeDefined();
       expect(updated.shareToken).toBe(token);
       expect(updated.shareAccess).toBe('edit');
     });

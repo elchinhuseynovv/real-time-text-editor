@@ -51,6 +51,7 @@
     ],
     "testMatch": [
       "**/tests/**/*.test.js"
-    ]
+    ],
+    "maxWorkers": 1
   }
 }

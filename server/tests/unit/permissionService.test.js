@@ -17,6 +17,10 @@ beforeEach(async () => {
   await Document.deleteMany({});
 });
 
+afterEach(async () => {
+  await Document.deleteMany({});
+});
+
 describe('PermissionService', () => {
   let documentId;
 

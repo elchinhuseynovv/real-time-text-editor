@@ -18,6 +18,11 @@ beforeEach(async () => {
   crdtService.documentStates.clear();
 });
 
+afterEach(async () => {
+  await Document.deleteMany({});
+  crdtService.documentStates.clear();
+});
+
 describe('DocumentService', () => {
   describe('createDocument', () => {
     test('should create document with title and content', async () => {

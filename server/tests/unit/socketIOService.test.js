@@ -232,9 +232,9 @@ describe('SocketIOService', () => {
 
       await socketIOService.handleDocumentChange(clientId1, 'New Content');
 
-      expect(crdtService.setContent).toHaveBeenCalledWith('doc123', 'New Content');
-      // broadcastToDocument excludes the sender, so it uses socket1.to() to exclude itself
-      expect(mockSocket1.to).toHaveBeenCalledWith('document:doc123');
+      expect(crdtService.setContent).toHaveBeenCalledWith('doc123', 'New Content', true);
+      // broadcastToDocument excludes the sender, so it uses socket1.broadcast.to() to exclude itself
+      expect(mockSocket1.broadcast.to).toHaveBeenCalledWith('document:doc123');
       expect(mockSocket1._mockEmit).toHaveBeenCalledWith(
         'document_update',
         expect.objectContaining({
@@ -291,8 +291,8 @@ describe('SocketIOService', () => {
       await socketIOService.handleTitleChange(clientId, 'New Title');
 
       expect(documentService.updateDocumentTitle).toHaveBeenCalledWith('doc123', 'New Title');
-      // broadcastToDocument excludes the sender, so it uses socket.to() to exclude itself
-      expect(mockSocket.to).toHaveBeenCalledWith('document:doc123');
+      // broadcastToDocument excludes the sender, so it uses socket.broadcast.to() to exclude itself
+      expect(mockSocket.broadcast.to).toHaveBeenCalledWith('document:doc123');
       expect(mockSocket._mockEmit).toHaveBeenCalledWith('title_update', { title: 'New Title' });
     });
   });
@@ -321,8 +321,8 @@ describe('SocketIOService', () => {
 
       socketIOService.handleChatMessage(clientId1, { text: 'Hello', timestamp: '2024-01-01' });
 
-      // broadcastToDocument excludes the sender, so it uses socket1.to() to exclude itself
-      expect(mockSocket1.to).toHaveBeenCalledWith('document:doc123');
+      // broadcastToDocument excludes the sender, so it uses socket1.broadcast.to() to exclude itself
+      expect(mockSocket1.broadcast.to).toHaveBeenCalledWith('document:doc123');
       expect(mockSocket1._mockEmit).toHaveBeenCalledWith(
         'chat_message',
         expect.objectContaining({
@@ -506,8 +506,8 @@ describe('SocketIOService', () => {
 
       socketIOService.broadcastToDocument('doc123', 'test_event', { data: 'test' }, clientId);
 
-      // Should use socket.to() to exclude the client
-      expect(mockSocket.to).toHaveBeenCalledWith('document:doc123');
+      // Should use socket.broadcast.to() to exclude the client
+      expect(mockSocket.broadcast.to).toHaveBeenCalledWith('document:doc123');
       expect(mockSocket._mockEmit).toHaveBeenCalledWith('test_event', { data: 'test' });
       // Should NOT use io.to() since we're excluding via socket
       expect(mockIO.to).not.toHaveBeenCalled();
@@ -676,6 +676,337 @@ describe('SocketIOService', () => {
       });
     });
   });
+
+  describe('handleCursorPosition', () => {
+    test('should broadcast cursor position with new format (line/column)', () => {
+      const mockSocket = createMockSocket('socket1');
+      socketIOService.handleConnection(mockSocket);
+      const clientId = mockSocket.clientId;
+
+      socketIOService.clients.get(clientId).documentId = 'doc123';
+      socketIOService.clients.get(clientId).username = 'user1';
+      socketIOService.documentClients.set('doc123', new Set([clientId]));
+
+      const mockIO = createMockIO();
+      socketIOService.io = mockIO;
+
+      socketIOService.handleCursorPosition(clientId, { line: 5, column: 10 }, 'doc123');
+
+      expect(mockSocket.broadcast.to).toHaveBeenCalledWith('document:doc123');
+      expect(mockSocket._mockEmit).toHaveBeenCalledWith(
+        'cursor_update',
+        expect.objectContaining({
+          line: 5,
+          column: 10,
+          username: 'user1',
+        })
+      );
+    });
+
+    test('should broadcast cursor position with legacy format (position)', () => {
+      const mockSocket = createMockSocket('socket1');
+      socketIOService.handleConnection(mockSocket);
+      const clientId = mockSocket.clientId;
+
+      socketIOService.clients.get(clientId).documentId = 'doc123';
+      socketIOService.clients.get(clientId).username = 'user1';
+      socketIOService.documentClients.set('doc123', new Set([clientId]));
+
+      const mockIO = createMockIO();
+      socketIOService.io = mockIO;
+
+      socketIOService.handleCursorPosition(clientId, 42, 'doc123');
+
+      expect(mockSocket.broadcast.to).toHaveBeenCalledWith('document:doc123');
+      expect(mockSocket._mockEmit).toHaveBeenCalledWith(
+        'cursor_update',
+        expect.objectContaining({
+          position: 42,
+        })
+      );
+    });
+
+    test('should handle missing client gracefully', () => {
+      socketIOService.handleCursorPosition('nonexistent', { line: 1, column: 1 }, 'doc123');
+      // Should not throw error
+    });
+
+    test('should use client documentId if not provided', () => {
+      const mockSocket = createMockSocket('socket1');
+      socketIOService.handleConnection(mockSocket);
+      const clientId = mockSocket.clientId;
+
+      socketIOService.clients.get(clientId).documentId = 'doc123';
+      socketIOService.clients.get(clientId).username = 'user1';
+      socketIOService.documentClients.set('doc123', new Set([clientId]));
+
+      const mockIO = createMockIO();
+      socketIOService.io = mockIO;
+
+      socketIOService.handleCursorPosition(clientId, { line: 1, column: 1 });
+
+      expect(mockSocket.broadcast.to).toHaveBeenCalledWith('document:doc123');
+    });
+
+    test('should handle missing documentId gracefully', () => {
+      const mockSocket = createMockSocket('socket1');
+      socketIOService.handleConnection(mockSocket);
+      const clientId = mockSocket.clientId;
+
+      socketIOService.handleCursorPosition(clientId, { line: 1, column: 1 });
+      // Should not throw error
+    });
+  });
+
+  describe('handleDocumentOperation', () => {
+    test('should apply operation and broadcast to other clients', async () => {
+      const mockSocket = createMockSocket('socket1');
+      socketIOService.handleConnection(mockSocket);
+      const clientId = mockSocket.clientId;
+
+      await socketIOService.handleUserJoin(clientId, 'user1');
+
+      const mockDoc = { _id: { toString: () => 'doc123' }, title: 'Test', content: '' };
+      documentService.getDocumentById.mockResolvedValue(mockDoc);
+      crdtService.getContent.mockReturnValue('');
+
+      await socketIOService.handleSetDocumentId(clientId, 'doc123');
+
+      crdtService.applyOperation.mockReturnValue({ content: 'Hello', version: 1 });
+
+      const mockIO = createMockIO();
+      socketIOService.io = mockIO;
+
+      await socketIOService.handleDocumentOperation(clientId, {
+        type: 'insert',
+        position: 0,
+        text: 'Hello',
+      });
+
+      expect(crdtService.applyOperation).toHaveBeenCalledWith(
+        'doc123',
+        'insert',
+        0,
+        'Hello',
+        clientId
+      );
+      expect(mockSocket.broadcast.to).toHaveBeenCalledWith('document:doc123');
+      expect(mockSocket._mockEmit).toHaveBeenCalledWith(
+        'document_operation',
+        expect.objectContaining({
+          operation: expect.objectContaining({ type: 'insert' }),
+          content: 'Hello',
+          user: 'user1',
+        })
+      );
+    });
+
+    test('should check permissions before applying operation', async () => {
+      const mockSocket = createMockSocket('socket1');
+      socketIOService.handleConnection(mockSocket);
+      const clientId = mockSocket.clientId;
+
+      await socketIOService.handleUserJoin(clientId, 'user1');
+
+      const mockDoc = { _id: { toString: () => 'doc123' }, title: 'Test', content: '' };
+      documentService.getDocumentById.mockResolvedValue(mockDoc);
+      crdtService.getContent.mockReturnValue('');
+
+      await socketIOService.handleSetDocumentId(clientId, 'doc123');
+
+      permissionService.checkPermission.mockResolvedValue(false);
+
+      await socketIOService.handleDocumentOperation(clientId, {
+        type: 'insert',
+        position: 0,
+        text: 'Hello',
+      });
+
+      expect(crdtService.applyOperation).not.toHaveBeenCalled();
+      expect(mockSocket.emit).toHaveBeenCalledWith(
+        'error',
+        expect.objectContaining({
+          message: expect.stringContaining('permissions'),
+        })
+      );
+    });
+
+    test('should handle missing client or documentId', async () => {
+      await socketIOService.handleDocumentOperation('nonexistent', {
+        type: 'insert',
+        position: 0,
+        text: 'Hello',
+      });
+      // Should not throw error
+    });
+  });
+
+  describe('handleUndo', () => {
+    test('should perform undo and broadcast result', async () => {
+      const mockSocket = createMockSocket('socket1');
+      socketIOService.handleConnection(mockSocket);
+      const clientId = mockSocket.clientId;
+
+      await socketIOService.handleUserJoin(clientId, 'user1');
+
+      socketIOService.clients.get(clientId).documentId = 'doc123';
+      socketIOService.documentClients.set('doc123', new Set([clientId]));
+
+      crdtService.undo.mockReturnValue({ content: 'Previous', version: 0, history: [] });
+
+      const mockIO = createMockIO();
+      socketIOService.io = mockIO;
+
+      await socketIOService.handleUndo(clientId);
+
+      expect(crdtService.undo).toHaveBeenCalledWith('doc123');
+      // broadcastToDocument with null excludeClientId broadcasts to all
+      expect(mockIO.to).toHaveBeenCalledWith('document:doc123');
+      expect(mockIO._mockEmit).toHaveBeenCalledWith(
+        'undo_result',
+        expect.objectContaining({
+          content: 'Previous',
+          user: 'user1',
+        })
+      );
+    });
+
+    test('should handle nothing to undo', async () => {
+      const mockSocket = createMockSocket('socket1');
+      socketIOService.handleConnection(mockSocket);
+      const clientId = mockSocket.clientId;
+
+      await socketIOService.handleUserJoin(clientId, 'user1');
+      socketIOService.clients.get(clientId).documentId = 'doc123';
+
+      crdtService.undo.mockReturnValue(null);
+
+      await socketIOService.handleUndo(clientId);
+
+      expect(mockSocket.emit).toHaveBeenCalledWith(
+        'error',
+        expect.objectContaining({
+          message: 'Nothing to undo',
+        })
+      );
+    });
+
+    test('should check permissions before undo', async () => {
+      const mockSocket = createMockSocket('socket1');
+      socketIOService.handleConnection(mockSocket);
+      const clientId = mockSocket.clientId;
+
+      await socketIOService.handleUserJoin(clientId, 'user1');
+      socketIOService.clients.get(clientId).documentId = 'doc123';
+
+      permissionService.checkPermission.mockResolvedValue(false);
+
+      await socketIOService.handleUndo(clientId);
+
+      expect(crdtService.undo).not.toHaveBeenCalled();
+      expect(mockSocket.emit).toHaveBeenCalledWith(
+        'error',
+        expect.objectContaining({
+          message: expect.stringContaining('permissions'),
+        })
+      );
+    });
+  });
+
+  describe('handleRedo', () => {
+    test('should perform redo and broadcast result', async () => {
+      const mockSocket = createMockSocket('socket1');
+      socketIOService.handleConnection(mockSocket);
+      const clientId = mockSocket.clientId;
+
+      await socketIOService.handleUserJoin(clientId, 'user1');
+
+      socketIOService.clients.get(clientId).documentId = 'doc123';
+      socketIOService.documentClients.set('doc123', new Set([clientId]));
+
+      crdtService.redo.mockReturnValue({ content: 'Next', version: 1, history: [] });
+
+      const mockIO = createMockIO();
+      socketIOService.io = mockIO;
+
+      await socketIOService.handleRedo(clientId);
+
+      expect(crdtService.redo).toHaveBeenCalledWith('doc123');
+      // broadcastToDocument with null excludeClientId broadcasts to all
+      expect(mockIO.to).toHaveBeenCalledWith('document:doc123');
+      expect(mockIO._mockEmit).toHaveBeenCalledWith(
+        'redo_result',
+        expect.objectContaining({
+          content: 'Next',
+          user: 'user1',
+        })
+      );
+    });
+
+    test('should handle nothing to redo', async () => {
+      const mockSocket = createMockSocket('socket1');
+      socketIOService.handleConnection(mockSocket);
+      const clientId = mockSocket.clientId;
+
+      await socketIOService.handleUserJoin(clientId, 'user1');
+      socketIOService.clients.get(clientId).documentId = 'doc123';
+
+      crdtService.redo.mockReturnValue(null);
+
+      await socketIOService.handleRedo(clientId);
+
+      expect(mockSocket.emit).toHaveBeenCalledWith(
+        'error',
+        expect.objectContaining({
+          message: 'Nothing to redo',
+        })
+      );
+    });
+
+    test('should check permissions before redo', async () => {
+      const mockSocket = createMockSocket('socket1');
+      socketIOService.handleConnection(mockSocket);
+      const clientId = mockSocket.clientId;
+
+      await socketIOService.handleUserJoin(clientId, 'user1');
+      socketIOService.clients.get(clientId).documentId = 'doc123';
+
+      permissionService.checkPermission.mockResolvedValue(false);
+
+      await socketIOService.handleRedo(clientId);
+
+      expect(crdtService.redo).not.toHaveBeenCalled();
+      expect(mockSocket.emit).toHaveBeenCalledWith(
+        'error',
+        expect.objectContaining({
+          message: expect.stringContaining('permissions'),
+        })
+      );
+    });
+  });
+
+  describe('handleDocumentChange with skipHistory', () => {
+    test('should update CRDT with skipHistory flag', async () => {
+      const mockSocket = createMockSocket('socket1');
+      socketIOService.handleConnection(mockSocket);
+      const clientId = mockSocket.clientId;
+
+      await socketIOService.handleUserJoin(clientId, 'user1');
+
+      const mockDoc = { _id: { toString: () => 'doc123' }, title: 'Test', content: '' };
+      documentService.getDocumentById.mockResolvedValue(mockDoc);
+      crdtService.getContent.mockReturnValue('');
+
+      await socketIOService.handleSetDocumentId(clientId, 'doc123');
+
+      const mockIO = createMockIO();
+      socketIOService.io = mockIO;
+
+      await socketIOService.handleDocumentChange(clientId, 'New Content', true);
+
+      expect(crdtService.setContent).toHaveBeenCalledWith('doc123', 'New Content', false);
+    });
+  });
 });
 
 // Helper functions
@@ -685,6 +1016,7 @@ function createMockSocket(id) {
     emit: mockEmit,
   };
   const mockTo = jest.fn(() => mockRoomEmitter);
+  const mockBroadcastTo = jest.fn(() => mockRoomEmitter);
 
   const mockSocket = {
     id: id,
@@ -695,6 +1027,9 @@ function createMockSocket(id) {
     join: jest.fn(),
     leave: jest.fn(),
     to: mockTo,
+    broadcast: {
+      to: mockBroadcastTo,
+    },
     _mockEmit: mockEmit, // Expose for testing
   };
   return mockSocket;
