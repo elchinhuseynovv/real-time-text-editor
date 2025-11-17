@@ -111,6 +111,16 @@ class SocketIOService {
       await this.handleDocumentOperation(clientId, data.operation);
     });
 
+    // Handle undo operation
+    socket.on('undo', async () => {
+      await this.handleUndo(clientId);
+    });
+
+    // Handle redo operation
+    socket.on('redo', async () => {
+      await this.handleRedo(clientId);
+    });
+
     // Handle title change
     socket.on('title_change', async (data) => {
       await this.handleTitleChange(clientId, data.title);
@@ -124,6 +134,16 @@ class SocketIOService {
     // Handle save document
     socket.on('save_document', async (data) => {
       await this.handleSaveDocument(clientId, data);
+    });
+
+    // Handle cursor position update
+    // Supports both new format {line, column, documentId} and legacy {position, documentId}
+    socket.on('cursor_position', (data) => {
+      // Pass the entire data object or just position for backward compatibility
+      const cursorData = (data.line !== undefined && data.column !== undefined)
+        ? { line: data.line, column: data.column }
+        : data.position;
+      this.handleCursorPosition(clientId, cursorData, data.documentId);
     });
 
     // Handle disconnect
@@ -217,12 +237,14 @@ class SocketIOService {
         // Send current document state to client
         const document = await documentService.getDocumentById(documentId);
         if (document) {
+          const history = crdtService.getHistory(documentId);
           this.sendToClient(client.socket, 'init', {
             document: {
               title: document.title,
               content: crdtService.getContent(documentId),
             },
             users: this.getUsersForDocument(documentId),
+            history: history, // Include history state
           });
 
           // Broadcast user list update to all clients viewing this document
@@ -246,8 +268,9 @@ class SocketIOService {
    * Handle document content change (simple text replacement)
    * @param {string} clientId - Client ID
    * @param {string} content - New content
+   * @param {boolean} skipHistory - Whether to skip adding to history (for undo/redo)
    */
-  async handleDocumentChange(clientId, content) {
+  async handleDocumentChange(clientId, content, skipHistory = false) {
     const client = this.clients.get(clientId);
     if (!client || !client.documentId) {
       return;
@@ -265,8 +288,8 @@ class SocketIOService {
       return;
     }
 
-    // Update CRDT state
-    crdtService.setContent(client.documentId, content);
+    // Update CRDT state (skip history if this is from undo/redo)
+    crdtService.setContent(client.documentId, content, !skipHistory);
 
     // Broadcast to other clients viewing the same document
     this.broadcastToDocument(
@@ -385,6 +408,169 @@ class SocketIOService {
         message: chatMessage,
       },
       clientId
+    );
+  }
+
+  /**
+   * Handle cursor position update
+   * @param {string} clientId - Client ID
+   * @param {number|null} position - Cursor position (null to remove cursor)
+   * @param {string} documentId - Document ID
+   */
+  handleCursorPosition(clientId, data, documentId) {
+    const client = this.clients.get(clientId);
+    if (!client) {
+      console.warn(`⚠️ Client ${clientId} not found for cursor position update`);
+      return;
+    }
+
+    // Use provided documentId or client's documentId
+    const docId = documentId || client.documentId;
+    if (!docId) {
+      console.warn(`⚠️ No documentId for cursor position update from client ${clientId}`);
+      return;
+    }
+
+    // Support both new line/column format and legacy position format
+    // New format: { line, column }
+    // Legacy format: just a number (position)
+    let cursorData;
+    if (typeof data === 'object' && data !== null) {
+      // New format: object with line and column
+      cursorData = {
+        line: data.line,
+        column: data.column
+      };
+      client.cursorPosition = cursorData; // Store in client
+    } else {
+      // Legacy format: absolute position number
+      cursorData = { position: data };
+      client.cursorPosition = data;
+    }
+
+    // Determine userId - prefer userId from socket.user, then client.userId, then clientId
+    const userId = client.socket?.user?.userId || client.userId || clientId;
+    const username = client.username || client.name || client.socket?.user?.username || 'User';
+
+    console.log(`📍 Broadcasting cursor position:`, {
+      clientId,
+      userId,
+      username,
+      cursorData,
+      documentId: docId,
+      totalClients: this.documentClients.get(docId)?.size || 0
+    });
+
+    // Prepare broadcast payload
+    const broadcastData = {
+      userId: userId,
+      username: username,
+      color: client.color,
+    };
+
+    // Include cursor data (both formats for compatibility)
+    if (cursorData.line !== undefined && cursorData.column !== undefined) {
+      broadcastData.line = cursorData.line;
+      broadcastData.column = cursorData.column;
+    } else if (cursorData.position !== undefined) {
+      broadcastData.position = cursorData.position;
+    }
+
+    // Broadcast cursor update to other clients viewing the same document
+    // Note: excludeClientId excludes the sender, so other clients will receive this
+    this.broadcastToDocument(
+      docId,
+      'cursor_update',
+      broadcastData,
+      clientId // Don't send to the sender
+    );
+
+    console.log(`✅ Cursor position broadcasted to document ${docId}`);
+  }
+
+  /**
+   * Handle undo operation
+   * @param {string} clientId - Client ID
+   */
+  async handleUndo(clientId) {
+    const client = this.clients.get(clientId);
+    if (!client || !client.documentId) {
+      return;
+    }
+
+    // Check permission
+    const hasPermission = await permissionService.checkPermission(
+      client.documentId,
+      client.username,
+      'write'
+    );
+
+    if (!hasPermission) {
+      this.sendError(client.socket, 'Insufficient permissions to undo');
+      return;
+    }
+
+    // Perform undo operation
+    const result = crdtService.undo(client.documentId);
+    
+    if (!result) {
+      this.sendError(client.socket, 'Nothing to undo');
+      return;
+    }
+
+    // Broadcast undo result to all clients (including the requester)
+    this.broadcastToDocument(
+      client.documentId,
+      'undo_result',
+      {
+        content: result.content,
+        history: result.history,
+        user: client.username,
+      },
+      null // Broadcast to all including requester so they sync their UI
+    );
+  }
+
+  /**
+   * Handle redo operation
+   * @param {string} clientId - Client ID
+   */
+  async handleRedo(clientId) {
+    const client = this.clients.get(clientId);
+    if (!client || !client.documentId) {
+      return;
+    }
+
+    // Check permission
+    const hasPermission = await permissionService.checkPermission(
+      client.documentId,
+      client.username,
+      'write'
+    );
+
+    if (!hasPermission) {
+      this.sendError(client.socket, 'Insufficient permissions to redo');
+      return;
+    }
+
+    // Perform redo operation
+    const result = crdtService.redo(client.documentId);
+    
+    if (!result) {
+      this.sendError(client.socket, 'Nothing to redo');
+      return;
+    }
+
+    // Broadcast redo result to all clients (including the requester)
+    this.broadcastToDocument(
+      client.documentId,
+      'redo_result',
+      {
+        content: result.content,
+        history: result.history,
+        user: client.username,
+      },
+      null // Broadcast to all including requester so they sync their UI
     );
   }
 
@@ -528,6 +714,24 @@ class SocketIOService {
     if (client) {
       console.log('👤 Client disconnected:', client.username || clientId);
 
+      // Send null cursor position to remove cursor from other clients
+      // Send both formats for compatibility
+      if (client.documentId) {
+        this.broadcastToDocument(
+          client.documentId,
+          'cursor_update',
+          {
+            userId: client.userId || clientId,
+            username: client.username || client.name || 'User',
+            line: null, // null means remove cursor (new format)
+            column: null,
+            position: null, // null means remove cursor (legacy format)
+            color: client.color,
+          },
+          clientId // Don't send to the disconnected client
+        );
+      }
+
       // Remove from document's client set
       if (client.documentId) {
         const docClients = this.documentClients.get(client.documentId);
@@ -597,8 +801,9 @@ class SocketIOService {
     if (excludeClientId) {
       const excludeSocket = this.clients.get(excludeClientId)?.socket;
       if (excludeSocket && excludeSocket.connected) {
-        // Send to room excluding the specified socket
-        excludeSocket.to(room).emit(type, data);
+        // Broadcast to room, excluding the specified socket
+        // socket.broadcast.to(room) sends to everyone in room EXCEPT the socket itself
+        excludeSocket.broadcast.to(room).emit(type, data);
       } else {
         // If exclude socket not found, broadcast to all in room
         this.io.to(room).emit(type, data);

@@ -47,10 +47,13 @@ function App() {
   const [savedContent, setSavedContent] = useState(''); // Track saved content
   const [savedTitle, setSavedTitle] = useState(''); // Track saved title
   const [theme, setTheme] = useState('dark'); // 'dark' or 'light'
+  const [remoteCursors, setRemoteCursors] = useState([]); // Array of { userId, username, position, color }
+  const [cursorPositions, setCursorPositions] = useState({}); // Object: { userId: { top, left } }
   
   // Refs for Socket.IO and text editor
   const socket = useRef(null);
   const editorRef = useRef(null); // Changed from textareaRef to editorRef for contenteditable
+  const editorWrapperRef = useRef(null); // Ref for editor wrapper (for cursor positioning)
   const saveStatusTimeout = useRef(null);
   const isMountedRef = useRef(true);
   const handleServerMessageRef = useRef(null); // Ref to latest handleServerMessage
@@ -58,6 +61,14 @@ function App() {
   const documentContentRef = useRef(''); // Ref to track current document content
   const documentTitleRef = useRef(''); // Ref to track current document title
   const isTyping = useRef(false); // Track if user is currently typing
+  const isUndoRedoOperation = useRef(false); // Track if current update is from undo/redo
+  const previousContentBeforeUndoRedo = useRef(''); // Track content before undo/redo for cursor positioning
+  const setCursorPositionRef = useRef(null); // Ref to setCursorPosition function
+  const findChangePositionRef = useRef(null); // Ref to findChangePosition function
+  const cursorUpdateTimeout = useRef(null); // Debounce timer for cursor position updates
+  const lastCursorPosition = useRef(0); // Track last cursor position to avoid unnecessary updates
+  const cursorPositionUpdateTimeout = useRef(null); // Timeout for updating cursor positions
+  const isCalculatingCursorPositions = useRef(false); // Flag to prevent infinite recalculation loop
 
   // Initialize theme from localStorage
   useEffect(() => {
@@ -147,11 +158,25 @@ function App() {
       if (saveStatusTimeout.current) {
         clearTimeout(saveStatusTimeout.current);
       }
+      if (cursorUpdateTimeout.current) {
+        clearTimeout(cursorUpdateTimeout.current);
+      }
       if (socket.current) {
+        // Send null cursor position before disconnecting
+        if (socket.current.connected && documentId) {
+          try {
+            socket.current.emit('cursor_position', {
+              position: null,
+              documentId: documentId
+            });
+          } catch (error) {
+            // Ignore errors during cleanup
+          }
+        }
         socket.current.disconnect();
       }
     };
-  }, []);
+  }, [documentId]);
 
   // Fetch documents from backend - memoized to avoid dependency issues
   const fetchDocuments = useCallback(async () => {
@@ -188,6 +213,85 @@ function App() {
     }
   }, [userToken]);
 
+  // Helper function to set cursor position in contenteditable
+  // Defined early to avoid initialization order issues
+  const setCursorPosition = useCallback((position, editor) => {
+    if (!editor) return;
+    
+    try {
+      const textNodes = [];
+      const walker = document.createTreeWalker(
+        editor,
+        NodeFilter.SHOW_TEXT,
+        null
+      );
+      
+      let node;
+      while (node = walker.nextNode()) {
+        textNodes.push(node);
+      }
+      
+      let currentPos = 0;
+      for (const textNode of textNodes) {
+        const textLength = textNode.textContent.length;
+        if (currentPos + textLength >= position) {
+          const offset = position - currentPos;
+          const newRange = document.createRange();
+          newRange.setStart(textNode, Math.min(offset, textLength));
+          newRange.collapse(true);
+          const selection = window.getSelection();
+          selection.removeAllRanges();
+          selection.addRange(newRange);
+          return;
+        }
+        currentPos += textLength;
+      }
+      
+      // If position is beyond all text, place at end
+      if (textNodes.length > 0) {
+        const lastNode = textNodes[textNodes.length - 1];
+        const newRange = document.createRange();
+        newRange.setStart(lastNode, lastNode.textContent.length);
+        newRange.collapse(true);
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(newRange);
+      }
+    } catch (e) {
+      console.error('Error setting cursor position:', e);
+    }
+  }, []);
+
+  // Helper function to find where content changed (for cursor positioning)
+  // Defined early to avoid initialization order issues
+  const findChangePosition = useCallback((oldContent, newContent, isUndo) => {
+    // Convert HTML to plain text for comparison
+    const oldText = oldContent.replace(/<[^>]*>/g, '');
+    const newText = newContent.replace(/<[^>]*>/g, '');
+    
+    // Find the first difference
+    let i = 0;
+    while (i < oldText.length && i < newText.length && oldText[i] === newText[i]) {
+      i++;
+    }
+    
+    // Find the last difference from the end
+    let j = oldText.length - 1;
+    let k = newText.length - 1;
+    while (j >= i && k >= i && oldText[j] === newText[k]) {
+      j--;
+      k--;
+    }
+    
+    if (isUndo) {
+      // For undo: position cursor at the start of removed text (left)
+      return i;
+    } else {
+      // For redo: position cursor at the end of added text (right)
+      return k + 1;
+    }
+  }, []);
+
   // Handle messages from server - defined early to avoid hoisting issues
   const handleServerMessage = useCallback((type, data) => {
     switch(type) {
@@ -203,6 +307,11 @@ function App() {
         if (data.users) {
           setUsers(data.users);
         }
+        // Sync undo/redo stacks from server
+        if (data.history) {
+          setUndoStack(data.history.undoStack || []);
+          setRedoStack(data.history.redoStack || []);
+        }
         break;
         
       case 'document_update':
@@ -211,6 +320,8 @@ function App() {
           isServerUpdateRef.current = true;
           setDocumentContent(data.content);
           // Don't update savedContent here - only update on save or init
+          // Note: History is managed server-side, so we don't update local stacks here
+          // The server will send history updates separately if needed
         }
         break;
         
@@ -234,6 +345,115 @@ function App() {
         setMessages(prev => [...prev, data.message]);
         // Increment unread count if chat is not open
         setUnreadMessages(prev => showChat ? 0 : prev + 1);
+        break;
+        
+      case 'undo_result':
+        // Handle undo result from server - update document and sync history
+        if (data.content !== undefined) {
+          isServerUpdateRef.current = true;
+          // Get current content from editor or ref (before update)
+          const currentContent = editorRef.current?.innerHTML || documentContentRef.current || documentContent;
+          const oldContent = previousContentBeforeUndoRedo.current || currentContent;
+          setDocumentContent(data.content);
+          
+          // Set cursor position after content updates (moved left for undo)
+          // Only if this user initiated the undo, or calculate position from content diff
+          if (editorRef.current && findChangePositionRef.current && setCursorPositionRef.current) {
+            setTimeout(() => {
+              if (isUndoRedoOperation.current && oldContent) {
+                // User initiated undo - move cursor left to where text was removed
+                const cursorPos = findChangePositionRef.current(oldContent, data.content, true);
+                setCursorPositionRef.current(cursorPos, editorRef.current);
+                isUndoRedoOperation.current = false;
+              } else {
+                // Other users receiving undo - position at the change location
+                const cursorPos = findChangePositionRef.current(currentContent, data.content, true);
+                setCursorPositionRef.current(cursorPos, editorRef.current);
+              }
+            }, 0);
+          }
+        }
+        // Sync undo/redo stacks from server
+        if (data.history) {
+          setUndoStack(data.history.undoStack || []);
+          setRedoStack(data.history.redoStack || []);
+        }
+        break;
+        
+      case 'redo_result':
+        // Handle redo result from server - update document and sync history
+        if (data.content !== undefined) {
+          isServerUpdateRef.current = true;
+          // Get current content from editor or ref (before update)
+          const currentContent = editorRef.current?.innerHTML || documentContentRef.current || documentContent;
+          const oldContent = previousContentBeforeUndoRedo.current || currentContent;
+          setDocumentContent(data.content);
+          
+          // Set cursor position after content updates (moved right for redo)
+          // Only if this user initiated the redo, or calculate position from content diff
+          if (editorRef.current && findChangePositionRef.current && setCursorPositionRef.current) {
+            setTimeout(() => {
+              if (isUndoRedoOperation.current && oldContent) {
+                // User initiated redo - move cursor right to where text was added
+                const cursorPos = findChangePositionRef.current(oldContent, data.content, false);
+                setCursorPositionRef.current(cursorPos, editorRef.current);
+                isUndoRedoOperation.current = false;
+              } else {
+                // Other users receiving redo - position at the change location
+                const cursorPos = findChangePositionRef.current(currentContent, data.content, false);
+                setCursorPositionRef.current(cursorPos, editorRef.current);
+              }
+            }, 0);
+          }
+        }
+        // Sync undo/redo stacks from server
+        if (data.history) {
+          setUndoStack(data.history.undoStack || []);
+          setRedoStack(data.history.redoStack || []);
+        }
+        break;
+        
+      case 'cursor_update':
+        // Update remote cursor positions - now supports line/column format
+        // Check if this is our own cursor - be more lenient with comparison
+        const receivedUserId = String(data.userId || '');
+        const ourUserId = String(userInfo?.id || userInfo?.userId || currentUser || '');
+        const isOwnCursor = receivedUserId && ourUserId && (
+          receivedUserId === ourUserId ||
+          receivedUserId === String(currentUser || '') ||
+          (userInfo && receivedUserId === String(userInfo.id || userInfo.userId || ''))
+        );
+
+        if (data.userId && !isOwnCursor) {
+          setRemoteCursors(prev => {
+            const filtered = prev.filter(c => c.userId !== data.userId);
+
+            // Check for valid cursor data (supports both formats)
+            const hasLineColumn = data.line !== null && data.line !== undefined &&
+                                  data.column !== null && data.column !== undefined;
+            const hasPosition = data.position !== null && data.position !== undefined;
+
+            if (hasLineColumn || hasPosition) {
+              const newCursor = {
+                userId: data.userId,
+                username: data.username || 'User',
+                color: data.color || '#3b82f6'
+              };
+
+              // Prefer line/column format over legacy position
+              if (hasLineColumn) {
+                newCursor.line = data.line;
+                newCursor.column = data.column;
+              } else {
+                newCursor.position = data.position; // legacy format
+              }
+
+              return [...filtered, newCursor];
+            }
+
+            return filtered; // Remove cursor if no valid position data
+          });
+        }
         break;
         
       case 'save_success':
@@ -316,10 +536,18 @@ function App() {
     }
   }, [documentId, showChat, userToken]); // Removed documentContent and documentTitle from dependencies
   
-  // Update ref whenever handleServerMessage changes
+  // Update refs whenever functions change
   useEffect(() => {
     handleServerMessageRef.current = handleServerMessage;
   }, [handleServerMessage]);
+  
+  useEffect(() => {
+    setCursorPositionRef.current = setCursorPosition;
+  }, [setCursorPosition]);
+  
+  useEffect(() => {
+    findChangePositionRef.current = findChangePosition;
+  }, [findChangePosition]);
   
   // Update refs when content/title changes
   useEffect(() => {
@@ -441,9 +669,12 @@ function App() {
       socket.current.removeAllListeners('init');
       socket.current.removeAllListeners('document_update');
       socket.current.removeAllListeners('document_operation');
+      socket.current.removeAllListeners('undo_result');
+      socket.current.removeAllListeners('redo_result');
       socket.current.removeAllListeners('title_update');
       socket.current.removeAllListeners('user_list_update');
       socket.current.removeAllListeners('chat_message');
+      socket.current.removeAllListeners('cursor_update');
       socket.current.removeAllListeners('save_success');
       socket.current.removeAllListeners('save_error');
       socket.current.removeAllListeners('error');
@@ -452,9 +683,15 @@ function App() {
       socket.current.on('init', (data) => handleServerMessageRef.current?.('init', data));
       socket.current.on('document_update', (data) => handleServerMessageRef.current?.('document_update', data));
       socket.current.on('document_operation', (data) => handleServerMessageRef.current?.('document_operation', data));
+      socket.current.on('undo_result', (data) => handleServerMessageRef.current?.('undo_result', data));
+      socket.current.on('redo_result', (data) => handleServerMessageRef.current?.('redo_result', data));
       socket.current.on('title_update', (data) => handleServerMessageRef.current?.('title_update', data));
       socket.current.on('user_list_update', (data) => handleServerMessageRef.current?.('user_list_update', data));
       socket.current.on('chat_message', (data) => handleServerMessageRef.current?.('chat_message', data));
+      socket.current.on('cursor_update', (data) => {
+        console.log('🔔 Received cursor_update event:', data);
+        handleServerMessageRef.current?.('cursor_update', data);
+      });
       socket.current.on('save_success', (data) => handleServerMessageRef.current?.('save_success', data));
       socket.current.on('save_error', (data) => handleServerMessageRef.current?.('save_error', data));
       socket.current.on('role_changed', (data) => handleServerMessageRef.current?.('role_changed', data));
@@ -507,60 +744,501 @@ function App() {
       editorRef.current.innerHTML = documentContent;
     }
   }, [screen, documentContent]);
+
+  // ============================================================================
+  // LINE-BASED CURSOR TRACKING SYSTEM
+  // ============================================================================
+  // This system tracks cursors by (line, column) instead of absolute position.
+  // This prevents cursor drift when users edit different lines simultaneously.
+  // ============================================================================
+
+  /**
+   * Get all block-level line elements in the editor
+   * Each element represents one logical line
+   * @returns {Array<HTMLElement>} Array of line elements
+   */
+  const getLineElements = useCallback(() => {
+    if (!editorRef.current) return [];
+
+    const lines = [];
+    const children = editorRef.current.childNodes;
+
+    for (let i = 0; i < children.length; i++) {
+      const child = children[i];
+      // Only consider block-level elements as lines
+      if (child.nodeType === Node.ELEMENT_NODE) {
+        const tagName = child.tagName.toLowerCase();
+        if (['div', 'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'].includes(tagName)) {
+          lines.push(child);
+        }
+      }
+    }
+
+    // If no block elements found, treat entire editor as single line
+    if (lines.length === 0) {
+      return [editorRef.current];
+    }
+
+    return lines;
+  }, []);
+
+  /**
+   * Get cursor position as {line, column}
+   * - line: 0-based line index
+   * - column: character offset within that line
+   * This provides line-level isolation for multi-user editing
+   */
+  const getCursorLineColumn = useCallback(() => {
+    if (!editorRef.current) return { line: 0, column: 0 };
+
+    try {
+      const selection = window.getSelection();
+      if (!selection || selection.rangeCount === 0) return { line: 0, column: 0 };
+
+      const range = selection.getRangeAt(0);
+      const cursorNode = range.endContainer;
+      const cursorOffset = range.endOffset;
+
+      const lineElements = getLineElements();
+
+      // Find which line contains the cursor
+      for (let lineIndex = 0; lineIndex < lineElements.length; lineIndex++) {
+        const lineElement = lineElements[lineIndex];
+
+        // Check if cursor is in this line
+        if (lineElement.contains(cursorNode) || lineElement === cursorNode) {
+          // Calculate column offset within this line
+          let column = 0;
+          let found = false;
+
+          const traverseLineNode = (node) => {
+            if (found) return;
+
+            // Found the cursor node
+            if (node === cursorNode) {
+              if (node.nodeType === Node.TEXT_NODE) {
+                column += cursorOffset;
+              } else {
+                // Cursor is in element container, count children before offset
+                for (let i = 0; i < Math.min(cursorOffset, node.childNodes.length); i++) {
+                  column += getTextLength(node.childNodes[i]);
+                }
+              }
+              found = true;
+              return;
+            }
+
+            // Count characters in this node
+            if (node.nodeType === Node.TEXT_NODE) {
+              column += node.textContent.length;
+            } else if (node.nodeType === Node.ELEMENT_NODE) {
+              const tagName = node.tagName.toLowerCase();
+
+              // <br> counts as 0 (it's just a line break within the line)
+              if (tagName === 'br') {
+                return;
+              }
+
+              // Traverse children
+              for (let i = 0; i < node.childNodes.length; i++) {
+                if (found) break;
+                traverseLineNode(node.childNodes[i]);
+              }
+            }
+          };
+
+          // Helper to get total text length of a node
+          const getTextLength = (node) => {
+            if (!node) return 0;
+            if (node.nodeType === Node.TEXT_NODE) {
+              return node.textContent.length;
+            }
+            if (node.nodeType === Node.ELEMENT_NODE) {
+              const tagName = node.tagName.toLowerCase();
+              if (tagName === 'br') return 0;
+
+              let length = 0;
+              for (let i = 0; i < node.childNodes.length; i++) {
+                length += getTextLength(node.childNodes[i]);
+              }
+              return length;
+            }
+            return 0;
+          };
+
+          traverseLineNode(lineElement);
+
+          return { line: lineIndex, column: Math.max(0, column) };
+        }
+      }
+
+      // Cursor not found in any line, default to start
+      return { line: 0, column: 0 };
+    } catch (error) {
+      console.error('Error calculating cursor line/column:', error);
+      return { line: 0, column: 0 };
+    }
+  }, [getLineElements]);
+
+  /**
+   * Legacy function for backward compatibility
+   * Converts line/column to absolute position
+   * Only used for old code paths - prefer getCursorLineColumn()
+   */
+  const getCursorPosition = useCallback(() => {
+    const { line, column } = getCursorLineColumn();
+
+    // Convert to absolute position (for backward compatibility)
+    const lineElements = getLineElements();
+    let absolutePosition = 0;
+
+    for (let i = 0; i < line && i < lineElements.length; i++) {
+      absolutePosition += lineElements[i].textContent.length + 1; // +1 for newline
+    }
+    absolutePosition += column;
+
+    return absolutePosition;
+  }, [getCursorLineColumn, getLineElements]);
+
+  /**
+   * Calculate pixel position from line/column coordinates
+   * This is the core rendering function for remote cursors
+   * @param {number} lineIndex - 0-based line index
+   * @param {number} column - character offset within line
+   * @returns {{top: number, left: number}} Pixel coordinates relative to wrapper
+   */
+  const calculatePixelPosition = useCallback((lineIndex, column) => {
+    if (!editorRef.current || !editorWrapperRef.current) {
+      return { top: 0, left: 0 };
+    }
+
+    try {
+      const lineElements = getLineElements();
+
+      // Validate line index
+      if (lineIndex < 0 || lineIndex >= lineElements.length) {
+        // Line doesn't exist, place at end of document
+        const range = document.createRange();
+        range.selectNodeContents(editorRef.current);
+        range.collapse(false);
+        const rect = range.getBoundingClientRect();
+        const wrapperRect = editorWrapperRef.current.getBoundingClientRect();
+        return {
+          top: rect.top - wrapperRect.top,
+          left: rect.left - wrapperRect.left
+        };
+      }
+
+      const lineElement = lineElements[lineIndex];
+      const targetColumn = Math.max(0, column);
+
+      // Find the DOM node and offset for this column
+      let currentColumn = 0;
+      let found = false;
+      let foundNode = null;
+      let foundOffset = 0;
+
+      const traverseLineNode = (node) => {
+        if (found) return;
+
+        if (node.nodeType === Node.TEXT_NODE) {
+          const nodeLength = node.textContent.length;
+
+          if (currentColumn + nodeLength >= targetColumn) {
+            // Found the target column in this text node
+            foundNode = node;
+            foundOffset = targetColumn - currentColumn;
+            found = true;
+            return;
+          }
+
+          currentColumn += nodeLength;
+        } else if (node.nodeType === Node.ELEMENT_NODE) {
+          const tagName = node.tagName.toLowerCase();
+
+          // Skip <br> tags - they don't contribute to column position
+          if (tagName === 'br') {
+            return;
+          }
+
+          // Traverse children
+          for (let i = 0; i < node.childNodes.length; i++) {
+            if (found) break;
+            traverseLineNode(node.childNodes[i]);
+          }
+        }
+      };
+
+      traverseLineNode(lineElement);
+
+      // If we didn't find the exact column, handle special cases
+      if (!found) {
+        const range = document.createRange();
+
+        // Check if this is column 0 (beginning of line) or end of line
+        if (targetColumn === 0) {
+          // Position at START of line (column 0)
+          range.selectNodeContents(lineElement);
+          range.collapse(true); // true = collapse to start
+        } else {
+          // Position at end of line (beyond all text)
+          range.selectNodeContents(lineElement);
+          range.collapse(false); // false = collapse to end
+        }
+
+        let rect = range.getBoundingClientRect();
+        const wrapperRect = editorWrapperRef.current.getBoundingClientRect();
+
+        // For empty lines or zero-size rects, we need better positioning
+        if (rect.width === 0 || rect.height === 0) {
+          // Use line element's position directly for empty lines
+          const lineRect = lineElement.getBoundingClientRect();
+          return {
+            top: lineRect.top - wrapperRect.top,
+            left: lineRect.left - wrapperRect.left
+          };
+        }
+
+        return {
+          top: rect.top - wrapperRect.top,
+          left: rect.left - wrapperRect.left
+        };
+      }
+
+      // Create range at found position
+      const range = document.createRange();
+
+      if (foundNode.nodeType === Node.TEXT_NODE) {
+        range.setStart(foundNode, foundOffset);
+        range.setEnd(foundNode, foundOffset);
+      } else {
+        // Shouldn't happen, but handle empty elements
+        range.selectNodeContents(lineElement);
+        range.collapse(true);
+      }
+
+      let rect = range.getBoundingClientRect();
+      const wrapperRect = editorWrapperRef.current.getBoundingClientRect();
+
+      // Handle empty lines and collapsed ranges
+      if (rect.width === 0 || rect.height === 0) {
+        // For empty lines or collapsed positions, insert a temporary marker
+        const tempSpan = document.createElement('span');
+        tempSpan.textContent = '\u200b'; // Zero-width space
+        tempSpan.style.display = 'inline';
+
+        try {
+          range.insertNode(tempSpan);
+          const tempRect = tempSpan.getBoundingClientRect();
+
+          if (tempRect.width > 0 || tempRect.height > 0) {
+            rect = tempRect;
+          }
+
+          tempSpan.remove();
+        } catch (e) {
+          // Insertion failed, use line element position
+          const lineRect = lineElement.getBoundingClientRect();
+          return {
+            top: lineRect.top - wrapperRect.top,
+            left: lineRect.left - wrapperRect.left
+          };
+        }
+      }
+
+      return {
+        top: Math.max(0, rect.top - wrapperRect.top),
+        left: Math.max(0, rect.left - wrapperRect.left)
+      };
+
+    } catch (error) {
+      console.error('Error calculating pixel position:', error);
+      return { top: 0, left: 0 };
+    }
+  }, [getLineElements]);
+
+  /**
+   * Calculate pixel positions for all remote cursors
+   * Uses line/column data to provide line-level isolation
+   */
+  const calculateCursorPositions = useCallback(() => {
+    if (!editorRef.current || !editorWrapperRef.current || remoteCursors.length === 0) {
+      setCursorPositions({});
+      return;
+    }
+
+    // Prevent infinite loop from MutationObserver
+    if (isCalculatingCursorPositions.current) {
+      return;
+    }
+
+    isCalculatingCursorPositions.current = true;
+
+    try {
+      const newPositions = {};
+
+      remoteCursors.forEach(cursor => {
+      // Support both new line/column format and legacy position format
+      if (!cursor || cursor.userId === null || cursor.userId === undefined) {
+        return;
+      }
+
+      try {
+        let pixelPos;
+
+        if (cursor.line !== undefined && cursor.column !== undefined) {
+          // New format: {line, column}
+          pixelPos = calculatePixelPosition(cursor.line, cursor.column);
+        } else if (cursor.position !== undefined && cursor.position !== null) {
+          // Legacy format: absolute position - convert to line/column first
+          // This is for backward compatibility during transition
+          const lineElements = getLineElements();
+          let remainingPos = cursor.position;
+          let lineIndex = 0;
+          let column = 0;
+
+          for (let i = 0; i < lineElements.length; i++) {
+            const lineLength = lineElements[i].textContent.length;
+            if (remainingPos <= lineLength) {
+              lineIndex = i;
+              column = remainingPos;
+              break;
+            }
+            remainingPos -= lineLength + 1; // +1 for newline
+          }
+
+          pixelPos = calculatePixelPosition(lineIndex, column);
+        } else {
+          return; // Invalid cursor data
+        }
+
+        newPositions[cursor.userId] = pixelPos;
+      } catch (error) {
+        console.error('❌ Error calculating cursor position for', cursor.userId, error);
+        newPositions[cursor.userId] = { top: 0, left: 0 };
+      }
+    });
+
+      setCursorPositions(newPositions);
+    } finally {
+      // Always reset the flag, even if there was an error
+      isCalculatingCursorPositions.current = false;
+    }
+  }, [remoteCursors, calculatePixelPosition, getLineElements]);
+
+  // Recalculate cursor positions immediately when document content or cursors change
+  useEffect(() => {
+    // Clear any pending timeout
+    if (cursorPositionUpdateTimeout.current) {
+      clearTimeout(cursorPositionUpdateTimeout.current);
+      cursorPositionUpdateTimeout.current = null;
+    }
+
+    // Use double requestAnimationFrame to ensure DOM is fully updated
+    // This is important when document content changes
+    const rafId1 = requestAnimationFrame(() => {
+      const rafId2 = requestAnimationFrame(() => {
+        calculateCursorPositions();
+      });
+      cursorPositionUpdateTimeout.current = rafId2;
+    });
+    
+    return () => {
+      cancelAnimationFrame(rafId1);
+      if (cursorPositionUpdateTimeout.current) {
+        cancelAnimationFrame(cursorPositionUpdateTimeout.current);
+        cursorPositionUpdateTimeout.current = null;
+      }
+    };
+  }, [remoteCursors, documentContent, calculateCursorPositions]);
+
+  // Update cursor positions on scroll
+  useEffect(() => {
+    if (!editorRef.current || remoteCursors.length === 0) return;
+
+    const handleScroll = () => {
+      // Use requestAnimationFrame for smooth scroll updates
+      requestAnimationFrame(() => {
+        calculateCursorPositions();
+      });
+    };
+
+    const editor = editorRef.current;
+    editor.addEventListener('scroll', handleScroll, { passive: true });
+    
+    return () => {
+      editor.removeEventListener('scroll', handleScroll);
+    };
+  }, [editorRef, remoteCursors, calculateCursorPositions]);
+
+  // Watch for DOM changes in editor to recalculate cursor positions immediately
+  useEffect(() => {
+    if (!editorRef.current || remoteCursors.length === 0) return;
+
+    const editor = editorRef.current;
+    let rafId = null;
+    
+    // Use MutationObserver to detect DOM changes (text insertions/deletions)
+    const observer = new MutationObserver(() => {
+      // Cancel any pending animation frame
+      if (rafId) {
+        cancelAnimationFrame(rafId);
+      }
+      
+      // Use double requestAnimationFrame to ensure DOM is fully updated
+      rafId = requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          calculateCursorPositions();
+          rafId = null;
+        });
+      });
+    });
+
+    // Observe changes to child nodes and text content
+    observer.observe(editor, {
+      childList: true,
+      subtree: true,
+      characterData: true
+    });
+    
+    return () => {
+      observer.disconnect();
+      if (rafId) {
+        cancelAnimationFrame(rafId);
+      }
+    };
+  }, [editorRef, remoteCursors, calculateCursorPositions]);
   
   // Update contenteditable div when document content changes from server
   useEffect(() => {
     if (editorRef.current && isServerUpdateRef.current && documentContent !== editorRef.current.innerHTML) {
-      // Save cursor position
-      const selection = window.getSelection();
-      let cursorPosition = 0;
-      
-      if (selection.rangeCount > 0) {
-        const range = selection.getRangeAt(0);
-        const preCaretRange = range.cloneRange();
-        preCaretRange.selectNodeContents(editorRef.current);
-        preCaretRange.setEnd(range.endContainer, range.endOffset);
-        cursorPosition = preCaretRange.toString().length;
-      }
-      
-      // Update content
-      editorRef.current.innerHTML = documentContent;
-      
-      // Restore cursor position
-      try {
-        const textNodes = [];
-        const walker = document.createTreeWalker(
-          editorRef.current,
-          NodeFilter.SHOW_TEXT,
-          null
-        );
+      // Skip cursor restoration for undo/redo operations (handled separately)
+      if (!isUndoRedoOperation.current) {
+        // Save cursor position
+        const selection = window.getSelection();
+        let cursorPosition = 0;
         
-        let node;
-        while (node = walker.nextNode()) {
-          textNodes.push(node);
+        if (selection.rangeCount > 0) {
+          const range = selection.getRangeAt(0);
+          const preCaretRange = range.cloneRange();
+          preCaretRange.selectNodeContents(editorRef.current);
+          preCaretRange.setEnd(range.endContainer, range.endOffset);
+          cursorPosition = preCaretRange.toString().length;
         }
         
-        let currentPos = 0;
-        for (const textNode of textNodes) {
-          const textLength = textNode.textContent.length;
-          if (currentPos + textLength >= cursorPosition) {
-            const offset = cursorPosition - currentPos;
-            const newRange = document.createRange();
-            newRange.setStart(textNode, Math.min(offset, textLength));
-            newRange.collapse(true);
-            selection.removeAllRanges();
-            selection.addRange(newRange);
-            break;
-          }
-          currentPos += textLength;
-        }
-      } catch (e) {
-        // Cursor restoration failed, ignore
+        // Update content
+        editorRef.current.innerHTML = documentContent;
+        
+        // Restore cursor position
+        setCursorPosition(cursorPosition, editorRef.current);
+      } else {
+        // For undo/redo, just update content (cursor will be set in undo_result/redo_result handlers)
+        editorRef.current.innerHTML = documentContent;
       }
       
       isServerUpdateRef.current = false;
     }
-  }, [documentContent]);
+  }, [documentContent, setCursorPosition]);
   
   // Send document ID when connection is ready and we have a document ID
   useEffect(() => {
@@ -861,6 +1539,26 @@ function App() {
 
   // Go back to documents list
   const backToDocuments = () => {
+    // Clear cursor timeout
+    if (cursorUpdateTimeout.current) {
+      clearTimeout(cursorUpdateTimeout.current);
+    }
+    
+    // Send null cursor position before disconnecting
+    if (socket.current && socket.current.connected && documentId) {
+      try {
+        socket.current.emit('cursor_position', {
+          position: null,
+          documentId: documentId
+        });
+      } catch (error) {
+        // Ignore errors
+      }
+    }
+    
+    // Clear remote cursors
+    setRemoteCursors([]);
+    
     if (socket.current) {
       socket.current.disconnect();
       socket.current = null;
@@ -869,11 +1567,8 @@ function App() {
     setMessages([]);
     setScreen('documents');
     fetchDocuments();
-      };
+  };
       
-  // Track last saved state for undo
-  const lastUndoStateRef = useRef('');
-  
   // Toggle theme
   const toggleTheme = () => {
     const newTheme = theme === 'dark' ? 'light' : 'dark';
@@ -891,26 +1586,8 @@ function App() {
     
     const newContent = editorRef.current.innerHTML;
     
-    // Save to undo stack if content has changed significantly
-    if (newContent !== lastUndoStateRef.current && documentContent !== newContent) {
-      // Only add to undo stack if it's been more than 1 second since last change or significant change
-      const shouldSaveUndo = !isTyping.current || 
-        Math.abs(newContent.length - documentContent.length) > 10;
-      
-      if (shouldSaveUndo && documentContent) {
-        setUndoStack(prev => {
-          const newStack = [...prev];
-          // Only add if different from last item
-          if (newStack.length === 0 || newStack[newStack.length - 1] !== documentContent) {
-            newStack.push(documentContent);
-            return newStack.slice(-20); // Keep last 20 states
-          }
-          return newStack;
-        });
-        setRedoStack([]); // Clear redo stack on new change
-        lastUndoStateRef.current = documentContent;
-      }
-    }
+    // Note: Undo/redo history is now managed server-side, so we don't manage local stacks here
+    // The server will send history updates via socket events
     
     setDocumentContent(newContent);
     
@@ -931,41 +1608,86 @@ function App() {
     }
   };
   
-  // Undo function
+  // Undo function - sends request to server for shared undo
   const handleUndo = () => {
-    if (undoStack.length > 0 && editorRef.current) {
-      const previousState = undoStack[undoStack.length - 1];
-      setRedoStack(prev => [...prev, documentContent]);
-      setUndoStack(prev => prev.slice(0, -1));
-      
-      // Update the editor directly
-      editorRef.current.innerHTML = previousState;
-      setDocumentContent(previousState);
-          
-      // Send to server
-      if (socket.current && socket.current.connected && documentId) {
-        socket.current.emit('document_change', { content: previousState });
-          }
-        }
+    if (userRole === 'viewer' || !socket.current || !socket.current.connected || !documentId || !editorRef.current) {
+      return;
+    }
+    
+    // Check if undo is available (from server state)
+    if (!undoStack || undoStack.length === 0) {
+      return;
+    }
+    
+    // Store current content for cursor positioning
+    previousContentBeforeUndoRedo.current = editorRef.current.innerHTML;
+    isUndoRedoOperation.current = true;
+    
+    // Send undo request to server - server will handle and broadcast to all clients
+    socket.current.emit('undo');
   };
   
-  // Redo function
+  // Redo function - sends request to server for shared redo
   const handleRedo = () => {
-    if (redoStack.length > 0 && editorRef.current) {
-      const nextState = redoStack[redoStack.length - 1];
-      setUndoStack(prev => [...prev, documentContent]);
-      setRedoStack(prev => prev.slice(0, -1));
-      
-      // Update the editor directly
-      editorRef.current.innerHTML = nextState;
-      setDocumentContent(nextState);
-      
-      // Send to server
-      if (socket.current && socket.current.connected && documentId) {
-        socket.current.emit('document_change', { content: nextState });
-      }
+    if (userRole === 'viewer' || !socket.current || !socket.current.connected || !documentId || !editorRef.current) {
+      return;
     }
+    
+    // Check if redo is available (from server state)
+    if (!redoStack || redoStack.length === 0) {
+      return;
+    }
+    
+    // Store current content for cursor positioning
+    previousContentBeforeUndoRedo.current = editorRef.current.innerHTML;
+    isUndoRedoOperation.current = true;
+    
+    // Send redo request to server - server will handle and broadcast to all clients
+    socket.current.emit('redo');
   };
+
+  /**
+   * Send cursor position to server using line/column format
+   * This prevents cursor drift when other users edit different lines
+   */
+  const sendCursorPosition = useCallback(() => {
+    if (!socket.current || !socket.current.connected || !documentId || !editorRef.current) {
+      return;
+    }
+
+    const { line, column } = getCursorLineColumn();
+
+    // Check if position changed to avoid spam
+    const positionKey = `${line}:${column}`;
+    if (lastCursorPosition.current === positionKey) {
+      return;
+    }
+
+    lastCursorPosition.current = positionKey;
+
+    try {
+      console.log('📤 Sending cursor position:', { line, column });
+      socket.current.emit('cursor_position', {
+        line: line,
+        column: column,
+        documentId: documentId
+      });
+    } catch (error) {
+      console.error('Error sending cursor position:', error);
+    }
+  }, [documentId, getCursorLineColumn]);
+
+  // Handle cursor movement (debounced)
+  const handleCursorMove = useCallback(() => {
+    if (cursorUpdateTimeout.current) {
+      clearTimeout(cursorUpdateTimeout.current);
+    }
+    
+    // Debounce cursor updates - reduced delay for faster response
+    cursorUpdateTimeout.current = setTimeout(() => {
+      sendCursorPosition();
+    }, 50); // Update every 50ms for faster cursor tracking
+  }, [sendCursorPosition]);
 
   const handleTitleChange = (e) => {
     // Check if user has write permission
@@ -987,18 +1709,8 @@ function App() {
       return;
     }
     
-    // Save current state to undo stack before formatting
-    if (documentContent) {
-      setUndoStack(prev => {
-        const newStack = [...prev];
-        if (newStack.length === 0 || newStack[newStack.length - 1] !== documentContent) {
-          newStack.push(documentContent);
-          return newStack.slice(-20);
-        }
-        return newStack;
-      });
-      setRedoStack([]);
-    }
+    // Note: Undo/redo history is managed server-side
+    // The server will add this change to history when it receives the document_change event
     
     // Focus editor and ensure selection
     editorRef.current.focus();
@@ -2025,11 +2737,14 @@ function App() {
 
       <div className="main-content">
         <div className="editor-container">
-          <div className="editor-wrapper">
+          <div className="editor-wrapper" ref={editorWrapperRef}>
             <div
               ref={editorRef}
               contentEditable={userRole !== 'viewer' && isConnected}
               onInput={handleDocumentChange}
+              onClick={handleCursorMove}
+              onKeyUp={handleCursorMove}
+              onSelect={handleCursorMove}
               onKeyDown={(e) => {
                 // Handle keyboard shortcuts
                 if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
@@ -2051,18 +2766,8 @@ function App() {
                 }, 300);
               }}
               onPaste={(e) => {
-                // Save state before paste for undo
-                if (documentContent) {
-                  setUndoStack(prev => {
-                    const newStack = [...prev];
-                    if (newStack.length === 0 || newStack[newStack.length - 1] !== documentContent) {
-                      newStack.push(documentContent);
-                      return newStack.slice(-20);
-                    }
-                    return newStack;
-                  });
-                  setRedoStack([]);
-                }
+                // Note: Undo/redo history is managed server-side
+                // The server will add this change to history when it receives the document_change event
                 
                 // Allow paste with formatting from Word or other sources
                 // The default behavior will preserve HTML formatting
@@ -2079,6 +2784,65 @@ function App() {
                 whiteSpace: 'pre-wrap'
               }}
             />
+            {/* Render remote cursors */}
+            {remoteCursors.map(cursor => {
+                if (!cursor || !cursor.userId) {
+                  return null;
+                }
+
+                // Check if cursor has valid position data (supports both formats)
+                const hasLineColumn = cursor.line !== null && cursor.line !== undefined &&
+                                     cursor.column !== null && cursor.column !== undefined;
+                const hasPosition = cursor.position !== null && cursor.position !== undefined;
+
+                if (!hasLineColumn && !hasPosition) {
+                  return null; // No valid position data
+                }
+
+                // Get calculated position from state
+                const position = cursorPositions[cursor.userId] || { top: 24, left: 24 };
+                const { top, left } = position;
+                
+                return (
+                <div
+                  key={cursor.userId}
+                  className="remote-cursor"
+                  style={{
+                    position: 'absolute',
+                    top: `${top}px`,
+                    left: `${left}px`,
+                    width: '3px',
+                    height: '22px',
+                    backgroundColor: cursor.color || '#3b82f6',
+                    pointerEvents: 'none',
+                    zIndex: 1000,
+                    transition: 'top 0.15s ease, left 0.15s ease',
+                    opacity: 1,
+                    boxShadow: '0 0 4px rgba(0,0,0,0.3)'
+                  }}
+                >
+                  <div
+                    className="remote-cursor-label"
+                    style={{
+                      position: 'absolute',
+                      top: '-24px',
+                      left: '4px',
+                      backgroundColor: cursor.color || '#3b82f6',
+                      color: 'white',
+                      padding: '3px 8px',
+                      borderRadius: '4px',
+                      fontSize: '12px',
+                      fontWeight: '600',
+                      whiteSpace: 'nowrap',
+                      boxShadow: '0 2px 6px rgba(0,0,0,0.3)',
+                      border: '1px solid rgba(255,255,255,0.2)'
+                    }}
+                  >
+                    {cursor.username || 'User'}
+                  </div>
+                </div>
+                );
+              })}
           </div>
         </div>
 

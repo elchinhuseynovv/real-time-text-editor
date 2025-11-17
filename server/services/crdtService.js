@@ -17,9 +17,12 @@ class CRDTService {
    */
   initializeDocument(documentId, initialContent = '') {
     if (!this.documentStates.has(documentId)) {
+      const content = initialContent || '';
       this.documentStates.set(documentId, {
-        characters: this._stringToCRDT(initialContent),
+        characters: this._stringToCRDT(content),
         version: 0,
+        history: [content], // Shared history stack for undo/redo
+        historyIndex: 0, // Current position in history
       });
     }
   }
@@ -113,6 +116,28 @@ class CRDTService {
     state.version += 1;
 
     const newContent = this._crdtToString(characters);
+    
+    // Add to history for regular operations
+    if (!state.history) {
+      state.history = [newContent];
+      state.historyIndex = 0;
+    } else {
+      // Remove any history after current index (when undoing then making new changes)
+      state.history = state.history.slice(0, state.historyIndex + 1);
+      
+      // Only add if content actually changed
+      if (state.history[state.historyIndex] !== newContent) {
+        state.history.push(newContent);
+        state.historyIndex = state.history.length - 1;
+        
+        // Limit history size to prevent memory issues (keep last 50 states)
+        if (state.history.length > 50) {
+          state.history = state.history.slice(-50);
+          state.historyIndex = state.history.length - 1;
+        }
+      }
+    }
+    
     return {
       content: newContent,
       version: state.version,
@@ -165,13 +190,123 @@ class CRDTService {
    * Update document content (for initial load or external updates)
    * @param {string} documentId - Document ID
    * @param {string} content - New content
+   * @param {boolean} addToHistory - Whether to add this state to history (default: true)
    */
-  setContent(documentId, content) {
-    // Always update/reinitialize the document state
-    this.documentStates.set(documentId, {
-      characters: this._stringToCRDT(content || ''),
-      version: (this.documentStates.get(documentId)?.version || 0) + 1,
-    });
+  setContent(documentId, content, addToHistory = true) {
+    if (!this.documentStates.has(documentId)) {
+      this.initializeDocument(documentId, content);
+      return;
+    }
+
+    const state = this.documentStates.get(documentId);
+    const newContent = content || '';
+    
+    // Update CRDT characters
+    state.characters = this._stringToCRDT(newContent);
+    state.version += 1;
+
+    // Add to history if requested (for regular edits, not undo/redo)
+    if (addToHistory) {
+      // Remove any history after current index (when undoing then making new changes)
+      state.history = state.history.slice(0, state.historyIndex + 1);
+      
+      // Only add if content actually changed
+      if (state.history[state.historyIndex] !== newContent) {
+        state.history.push(newContent);
+        state.historyIndex = state.history.length - 1;
+        
+        // Limit history size to prevent memory issues (keep last 50 states)
+        if (state.history.length > 50) {
+          state.history = state.history.slice(-50);
+          state.historyIndex = state.history.length - 1;
+        }
+      }
+    }
+  }
+
+  /**
+   * Get undo/redo history for a document
+   * @param {string} documentId - Document ID
+   * @returns {Object} History state with undoStack, redoStack, and canUndo/canRedo flags
+   */
+  getHistory(documentId) {
+    if (!this.documentStates.has(documentId)) {
+      return {
+        undoStack: [],
+        redoStack: [],
+        canUndo: false,
+        canRedo: false,
+      };
+    }
+
+    const state = this.documentStates.get(documentId);
+    const undoStack = state.history.slice(0, state.historyIndex);
+    const redoStack = state.history.slice(state.historyIndex + 1);
+
+    return {
+      undoStack: undoStack.reverse(), // Most recent first
+      redoStack: redoStack, // Oldest first
+      canUndo: state.historyIndex > 0,
+      canRedo: state.historyIndex < state.history.length - 1,
+    };
+  }
+
+  /**
+   * Perform undo operation
+   * @param {string} documentId - Document ID
+   * @returns {Object|null} Previous state content or null if no undo available
+   */
+  undo(documentId) {
+    if (!this.documentStates.has(documentId)) {
+      return null;
+    }
+
+    const state = this.documentStates.get(documentId);
+    
+    if (state.historyIndex <= 0) {
+      return null; // No undo available
+    }
+
+    state.historyIndex -= 1;
+    const previousContent = state.history[state.historyIndex];
+    
+    // Update CRDT state without adding to history
+    state.characters = this._stringToCRDT(previousContent);
+    state.version += 1;
+
+    return {
+      content: previousContent,
+      history: this.getHistory(documentId),
+    };
+  }
+
+  /**
+   * Perform redo operation
+   * @param {string} documentId - Document ID
+   * @returns {Object|null} Next state content or null if no redo available
+   */
+  redo(documentId) {
+    if (!this.documentStates.has(documentId)) {
+      return null;
+    }
+
+    const state = this.documentStates.get(documentId);
+    
+    if (state.historyIndex >= state.history.length - 1) {
+      return null; // No redo available
+    }
+
+    state.historyIndex += 1;
+    const nextContent = state.history[state.historyIndex];
+    
+    // Update CRDT state without adding to history
+    state.characters = this._stringToCRDT(nextContent);
+    state.version += 1;
+
+    return {
+      content: nextContent,
+      history: this.getHistory(documentId),
+    };
   }
 
   /**
