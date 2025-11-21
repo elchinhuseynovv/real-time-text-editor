@@ -128,14 +128,6 @@ This logging strategy balances:
 - **Cleanliness** - Console isn't cluttered
 - **Maintainability** - Easy to add more logs when needed
 
-Total logs added: ~15 strategic log statements
-- 4 in auth controller (registration, login, login failures)
-- 2 in document controller (creation, deletion)
-- 2 in permission service (add/remove permission)
-- 2 in auth middleware (token failures)
-- 5 in database config (connection lifecycle)
-- All error logging remains intact
-
 ## Testing
 
 Start the server and observe clean, focused logs:
