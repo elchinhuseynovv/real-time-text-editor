@@ -20,34 +20,29 @@ const generateToken = (userId, email) => {
 const register = async (req, res, next) => {
   try {
     const { name, email, password } = req.body;
-    console.log(`📝 Registration attempt for email: ${email}`);
 
     // Validation
     if (!name || !email || !password) {
-      console.log(`⚠️ Registration failed: Missing required fields for ${email}`);
       return res.status(400).json({ error: 'Name, email, and password are required' });
     }
 
     if (password.length < 6) {
-      console.log(`⚠️ Registration failed: Password too short for ${email}`);
       return res.status(400).json({ error: 'Password must be at least 6 characters long' });
     }
 
     // Check if user already exists
     const existingUser = await User.findOne({ email });
     if (existingUser) {
-      console.log(`⚠️ Registration failed: User already exists with email ${email}`);
       return res.status(409).json({ error: 'User with this email already exists' });
     }
 
     // Create new user
     const user = new User({ name, email, password });
     await user.save();
-    console.log(`✅ User registered successfully: ${email} (ID: ${user._id})`);
+    console.log(`User registered: ${email}`);
 
     // Generate token
     const token = generateToken(user._id.toString(), user.email);
-    console.log(`🔑 JWT token generated for user: ${email}`);
 
     res.status(201).json({
       message: 'User registered successfully',
@@ -59,7 +54,7 @@ const register = async (req, res, next) => {
       },
     });
   } catch (error) {
-    console.error(`❌ Registration error for ${req.body.email}:`, error.message);
+    console.error('Registration error:', error.message);
     if (error.name === 'ValidationError') {
       return res.status(400).json({ error: error.message });
     }
@@ -76,31 +71,29 @@ const register = async (req, res, next) => {
 const login = async (req, res, next) => {
   try {
     const { email, password } = req.body;
-    console.log(`🔐 Login attempt for email: ${email}`);
 
     // Validation
     if (!email || !password) {
-      console.log(`⚠️ Login failed: Missing credentials for ${email}`);
       return res.status(400).json({ error: 'Email and password are required' });
     }
 
     // Find user by email
     const user = await User.findOne({ email });
     if (!user) {
-      console.log(`⚠️ Login failed: User not found for email ${email}`);
+      console.log(`Login failed: Invalid credentials for ${email}`);
       return res.status(401).json({ error: 'Invalid email or password' });
     }
 
     // Compare password
     const isPasswordValid = await user.comparePassword(password);
     if (!isPasswordValid) {
-      console.log(`⚠️ Login failed: Invalid password for email ${email}`);
+      console.log(`Login failed: Invalid password for ${email}`);
       return res.status(401).json({ error: 'Invalid email or password' });
     }
 
     // Generate token
     const token = generateToken(user._id.toString(), user.email);
-    console.log(`✅ Login successful for user: ${email} (ID: ${user._id})`);
+    console.log(`User logged in: ${email}`);
 
     res.json({
       message: 'Login successful',
@@ -112,7 +105,7 @@ const login = async (req, res, next) => {
       },
     });
   } catch (error) {
-    console.error(`❌ Login error for ${req.body.email}:`, error.message);
+    console.error('Login error:', error.message);
     next(error);
   }
 };
@@ -123,8 +116,6 @@ const login = async (req, res, next) => {
 const logout = async (req, res) => {
   // In a stateless JWT system, logout is handled client-side by removing the token
   // If you need server-side logout, implement token blacklisting
-  const userEmail = req.user?.email || 'unknown';
-  console.log(`👋 User logged out: ${userEmail}`);
   res.json({ message: 'Logout successful' });
 };
 
@@ -133,13 +124,10 @@ const logout = async (req, res) => {
  */
 const getProfile = async (req, res, next) => {
   try {
-    console.log(`👤 Profile request for user ID: ${req.user.userId}`);
     const user = await User.findById(req.user.userId).select('-password');
     if (!user) {
-      console.log(`⚠️ Profile not found for user ID: ${req.user.userId}`);
       return res.status(404).json({ error: 'User not found' });
     }
-    console.log(`✅ Profile retrieved for user: ${user.email}`);
     res.json({
       id: user._id,
       name: user.name,
@@ -147,7 +135,7 @@ const getProfile = async (req, res, next) => {
       createdAt: user.createdAt,
     });
   } catch (error) {
-    console.error(`❌ Profile retrieval error for user ID ${req.user?.userId}:`, error.message);
+    console.error('Profile retrieval error:', error.message);
     next(error);
   }
 };

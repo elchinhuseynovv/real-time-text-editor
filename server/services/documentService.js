@@ -16,7 +16,6 @@ class DocumentService {
    */
   async createDocument({ title, content = '', owner }) {
     try {
-      console.log(`📦 [DocumentService] Creating document - Title: "${title}", Owner: ${owner}`);
       const document = new Document({
         title: title || 'Untitled Document',
         content,
@@ -36,10 +35,9 @@ class DocumentService {
       // Initialize CRDT state
       crdtService.setContent(savedDoc._id.toString(), content);
 
-      console.log(`✅ [DocumentService] Document created successfully - ID: ${savedDoc._id}`);
       return savedDoc;
     } catch (error) {
-      console.error('❌ [DocumentService] Error creating document:', error.message);
+      console.error('Error creating document:', error.message);
       throw error;
     }
   }
@@ -51,16 +49,10 @@ class DocumentService {
    */
   async getDocumentById(documentId) {
     try {
-      console.log(`🔍 [DocumentService] Fetching document by ID: ${documentId}`);
       const document = await Document.findById(documentId);
-      if (document) {
-        console.log(`✅ [DocumentService] Document found - ID: ${documentId}, Title: "${document.title}"`);
-      } else {
-        console.log(`⚠️ [DocumentService] Document not found - ID: ${documentId}`);
-      }
       return document;
     } catch (error) {
-      console.error(`❌ [DocumentService] Error getting document ${documentId}:`, error.message);
+      console.error('Error getting document:', error.message);
       throw error;
     }
   }
@@ -77,7 +69,6 @@ class DocumentService {
   async getDocuments(options = {}) {
     try {
       const { owner, username, limit = 100, skip = 0 } = options;
-      console.log(`📋 [DocumentService] Fetching documents - Owner: ${owner || 'any'}, Username: ${username || 'any'}`);
 
       let query = {};
 
@@ -92,10 +83,9 @@ class DocumentService {
 
       const documents = await Document.find(query).sort({ updatedAt: -1 }).limit(limit).skip(skip);
 
-      console.log(`✅ [DocumentService] Retrieved ${documents.length} documents`);
       return documents;
     } catch (error) {
-      console.error('❌ [DocumentService] Error getting documents:', error.message);
+      console.error('Error getting documents:', error.message);
       throw error;
     }
   }
@@ -109,7 +99,6 @@ class DocumentService {
    */
   async updateDocumentContent(documentId, content, username) {
     try {
-      console.log(`✏️ [DocumentService] Updating document content - ID: ${documentId}, User: ${username}, Length: ${content?.length || 0} chars`);
       const document = await Document.findByIdAndUpdate(
         documentId,
         {
@@ -133,10 +122,9 @@ class DocumentService {
       // Update CRDT state
       crdtService.setContent(documentId, content);
 
-      console.log(`✅ [DocumentService] Document content updated successfully - ID: ${documentId}`);
       return document;
     } catch (error) {
-      console.error(`❌ [DocumentService] Error updating document ${documentId}:`, error.message);
+      console.error('Error updating document:', error.message);
       throw error;
     }
   }
@@ -149,7 +137,6 @@ class DocumentService {
    */
   async updateDocumentTitle(documentId, title) {
     try {
-      console.log(`🏷️ [DocumentService] Updating document title - ID: ${documentId}, New Title: "${title}"`);
       const document = await Document.findByIdAndUpdate(
         documentId,
         { title, updatedAt: new Date() },
@@ -160,10 +147,9 @@ class DocumentService {
         throw new Error('Document not found');
       }
 
-      console.log(`✅ [DocumentService] Document title updated successfully - ID: ${documentId}`);
       return document;
     } catch (error) {
-      console.error(`❌ [DocumentService] Error updating document title ${documentId}:`, error.message);
+      console.error('Error updating document title:', error.message);
       throw error;
     }
   }
@@ -175,16 +161,14 @@ class DocumentService {
    */
   async deleteDocument(documentId) {
     try {
-      console.log(`🗑️ [DocumentService] Deleting document - ID: ${documentId}`);
       const result = await Document.findByIdAndDelete(documentId);
 
       // Clear CRDT state
       crdtService.clearDocument(documentId);
 
-      console.log(`✅ [DocumentService] Document deleted successfully - ID: ${documentId}`);
       return !!result;
     } catch (error) {
-      console.error(`❌ [DocumentService] Error deleting document ${documentId}:`, error.message);
+      console.error('Error deleting document:', error.message);
       throw error;
     }
   }
@@ -195,14 +179,12 @@ class DocumentService {
    */
   async loadDocumentIntoCRDT(documentId) {
     try {
-      console.log(`🔄 [DocumentService] Loading document into CRDT - ID: ${documentId}`);
       const document = await this.getDocumentById(documentId);
       if (document) {
         crdtService.setContent(documentId, document.content || '');
-        console.log(`✅ [DocumentService] Document loaded into CRDT - ID: ${documentId}`);
       }
     } catch (error) {
-      console.error(`❌ [DocumentService] Error loading document into CRDT ${documentId}:`, error.message);
+      console.error('Error loading document into CRDT:', error.message);
     }
   }
 
@@ -215,7 +197,6 @@ class DocumentService {
    */
   async generateShareLink(documentId, access, requesterUsername) {
     try {
-      console.log(`🔗 [DocumentService] Generating share link - Document: ${documentId}, Access: ${access}, Requester: ${requesterUsername}`);
       const document = await Document.findById(documentId);
       if (!document) {
         throw new Error('Document not found');
@@ -235,10 +216,9 @@ class DocumentService {
       document.shareAccess = access;
       await document.save();
 
-      console.log(`✅ [DocumentService] Share link generated - Document: ${documentId}, Token: ${token.substring(0, 8)}...`);
       return token;
     } catch (error) {
-      console.error(`❌ [DocumentService] Error generating share link for ${documentId}:`, error.message);
+      console.error('Error generating share link:', error.message);
       throw error;
     }
   }
@@ -266,7 +246,6 @@ class DocumentService {
    */
   async joinDocumentByShareToken(shareToken, userEmail) {
     try {
-      console.log(`🔑 [DocumentService] Join attempt via share token - Token: ${shareToken.substring(0, 8)}..., User: ${userEmail}`);
       const document = await Document.findOne({ shareToken });
       if (!document) {
         throw new Error('Invalid share token');
@@ -294,13 +273,12 @@ class DocumentService {
         }
       }
 
-      console.log(`✅ [DocumentService] User ${userEmail} successfully joined document ${document._id} with ${access} access`);
       return {
         document,
         access,
       };
     } catch (error) {
-      console.error('❌ [DocumentService] Error joining document by share token:', error.message);
+      console.error('Error joining document by share token:', error.message);
       throw error;
     }
   }
@@ -313,7 +291,6 @@ class DocumentService {
    */
   async revokeShareLink(documentId, requesterUsername) {
     try {
-      console.log(`🚫 [DocumentService] Revoking share link - Document: ${documentId}, Requester: ${requesterUsername}`);
       const document = await Document.findById(documentId);
       if (!document) {
         throw new Error('Document not found');
@@ -328,10 +305,9 @@ class DocumentService {
       document.shareAccess = null;
       await document.save();
 
-      console.log(`✅ [DocumentService] Share link revoked successfully - Document: ${documentId}`);
       return true;
     } catch (error) {
-      console.error(`❌ [DocumentService] Error revoking share link for ${documentId}:`, error.message);
+      console.error('Error revoking share link:', error.message);
       throw error;
     }
   }

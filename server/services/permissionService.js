@@ -15,16 +15,13 @@ class PermissionService {
    */
   async checkPermission(documentId, username, action) {
     try {
-      console.log(`🔐 [PermissionService] Checking permission - Document: ${documentId}, User: ${username}, Action: ${action}`);
       const document = await Document.findById(documentId);
       if (!document) {
-        console.log(`⚠️ [PermissionService] Document not found - ID: ${documentId}`);
         return false;
       }
 
       // Owner has all permissions
       if (document.owner === username) {
-        console.log(`✅ [PermissionService] Access granted - User ${username} is owner of document ${documentId}`);
         return true;
       }
 
@@ -39,30 +36,19 @@ class PermissionService {
       const role = userPermission.role;
 
       // Check permissions based on role and action
-      let hasAccess = false;
       switch (action) {
         case 'read':
-          hasAccess = role === 'owner' || role === 'editor' || role === 'viewer';
-          break;
+          return role === 'owner' || role === 'editor' || role === 'viewer';
         case 'write':
-          hasAccess = role === 'owner' || role === 'editor';
-          break;
+          return role === 'owner' || role === 'editor';
         case 'delete':
         case 'manage':
-          hasAccess = role === 'owner';
-          break;
+          return role === 'owner';
         default:
-          hasAccess = false;
+          return false;
       }
-      
-      if (hasAccess) {
-        console.log(`✅ [PermissionService] Access granted - User: ${username}, Role: ${role}, Action: ${action}`);
-      } else {
-        console.log(`❌ [PermissionService] Access denied - User: ${username}, Role: ${role || 'none'}, Action: ${action}`);
-      }
-      return hasAccess;
     } catch (error) {
-      console.error(`❌ [PermissionService] Error checking permission for document ${documentId}:`, error.message);
+      console.error('Error checking permission:', error);
       return false;
     }
   }
@@ -75,10 +61,8 @@ class PermissionService {
    */
   async getUserRole(documentId, username) {
     try {
-      console.log(`👤 [PermissionService] Getting user role - Document: ${documentId}, User: ${username}`);
       const document = await Document.findById(documentId);
       if (!document) {
-        console.log(`⚠️ [PermissionService] Document not found - ID: ${documentId}`);
         return null;
       }
 
@@ -87,12 +71,10 @@ class PermissionService {
       }
 
       const userPermission = document.permissions.find((p) => p.username === username);
-      const role = userPermission ? userPermission.role : null;
-      
-      console.log(`✅ [PermissionService] User role retrieved - User: ${username}, Role: ${role || 'none'}`);
-      return role;
+
+      return userPermission ? userPermission.role : null;
     } catch (error) {
-      console.error(`❌ [PermissionService] Error getting user role for document ${documentId}:`, error.message);
+      console.error('Error getting user role:', error);
       return null;
     }
   }
@@ -107,7 +89,6 @@ class PermissionService {
    */
   async addPermission(documentId, username, role, requesterUsername) {
     try {
-      console.log(`➕ [PermissionService] Adding permission - Document: ${documentId}, User: ${username}, Role: ${role}, Requester: ${requesterUsername}`);
       // Check if requester has manage permission
       const hasPermission = await this.checkPermission(documentId, requesterUsername, 'manage');
 
@@ -127,10 +108,10 @@ class PermissionService {
       document.permissions.push({ username, role });
       await document.save();
 
-      console.log(`✅ [PermissionService] Permission added successfully - User: ${username}, Role: ${role}`);
+      console.log(`Permission added: ${username} as ${role} for document ${documentId}`);
       return true;
     } catch (error) {
-      console.error(`❌ [PermissionService] Error adding permission to document ${documentId}:`, error.message);
+      console.error('Error adding permission:', error);
       throw error;
     }
   }
@@ -144,7 +125,6 @@ class PermissionService {
    */
   async removePermission(documentId, username, requesterUsername) {
     try {
-      console.log(`➖ [PermissionService] Removing permission - Document: ${documentId}, User: ${username}, Requester: ${requesterUsername}`);
       // Check if requester has manage permission
       const hasPermission = await this.checkPermission(documentId, requesterUsername, 'manage');
 
@@ -165,10 +145,10 @@ class PermissionService {
       document.permissions = document.permissions.filter((p) => p.username !== username);
       await document.save();
 
-      console.log(`✅ [PermissionService] Permission removed successfully - User: ${username}`);
+      console.log(`Permission removed: ${username} from document ${documentId}`);
       return true;
     } catch (error) {
-      console.error(`❌ [PermissionService] Error removing permission from document ${documentId}:`, error.message);
+      console.error('Error removing permission:', error);
       throw error;
     }
   }
