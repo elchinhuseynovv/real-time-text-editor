@@ -27,7 +27,7 @@ class DocumentController {
       const documents = await documentService.getDocuments(filterOptions);
       res.json(documents);
     } catch (error) {
-      console.error('Error fetching documents:', error);
+      console.error('Error fetching documents:', error.message);
       res.status(500).json({ error: 'Failed to fetch documents' });
     }
   }
@@ -54,7 +54,7 @@ class DocumentController {
 
       res.json(document);
     } catch (error) {
-      console.error('Error fetching document:', error);
+      console.error('Error fetching document:', error.message);
       res.status(500).json({ error: 'Failed to fetch document' });
     }
   }
@@ -77,9 +77,10 @@ class DocumentController {
         owner: username,
       });
 
+      console.log(`Document created: ${document._id} by ${username}`);
       res.status(201).json(document);
     } catch (error) {
-      console.error('Error creating document:', error);
+      console.error('Error creating document:', error.message);
       res.status(500).json({ error: 'Failed to create document' });
     }
   }
@@ -137,9 +138,10 @@ class DocumentController {
         return res.status(404).json({ error: 'Document not found' });
       }
 
+      console.log(`Document deleted: ${id}`);
       res.json({ message: 'Document deleted successfully' });
     } catch (error) {
-      console.error('Error deleting document:', error);
+      console.error('Error deleting document:', error.message);
       res.status(500).json({ error: 'Failed to delete document' });
     }
   }
@@ -171,7 +173,7 @@ class DocumentController {
 
       res.json({ message: 'Permission added successfully' });
     } catch (error) {
-      console.error('Error adding permission:', error);
+      console.error('Error adding permission:', error.message);
       if (error.message === 'Insufficient permissions') {
         return res.status(403).json({ error: error.message });
       }

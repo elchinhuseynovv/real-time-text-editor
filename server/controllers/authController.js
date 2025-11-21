@@ -39,6 +39,7 @@ const register = async (req, res, next) => {
     // Create new user
     const user = new User({ name, email, password });
     await user.save();
+    console.log(`User registered: ${email}`);
 
     // Generate token
     const token = generateToken(user._id.toString(), user.email);
@@ -53,6 +54,7 @@ const register = async (req, res, next) => {
       },
     });
   } catch (error) {
+    console.error('Registration error:', error.message);
     if (error.name === 'ValidationError') {
       return res.status(400).json({ error: error.message });
     }
@@ -78,17 +80,20 @@ const login = async (req, res, next) => {
     // Find user by email
     const user = await User.findOne({ email });
     if (!user) {
+      console.log(`Login failed: Invalid credentials for ${email}`);
       return res.status(401).json({ error: 'Invalid email or password' });
     }
 
     // Compare password
     const isPasswordValid = await user.comparePassword(password);
     if (!isPasswordValid) {
+      console.log(`Login failed: Invalid password for ${email}`);
       return res.status(401).json({ error: 'Invalid email or password' });
     }
 
     // Generate token
     const token = generateToken(user._id.toString(), user.email);
+    console.log(`User logged in: ${email}`);
 
     res.json({
       message: 'Login successful',
@@ -100,6 +105,7 @@ const login = async (req, res, next) => {
       },
     });
   } catch (error) {
+    console.error('Login error:', error.message);
     next(error);
   }
 };
@@ -129,6 +135,7 @@ const getProfile = async (req, res, next) => {
       createdAt: user.createdAt,
     });
   } catch (error) {
+    console.error('Profile retrieval error:', error.message);
     next(error);
   }
 };

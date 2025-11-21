@@ -108,6 +108,7 @@ class PermissionService {
       document.permissions.push({ username, role });
       await document.save();
 
+      console.log(`Permission added: ${username} as ${role} for document ${documentId}`);
       return true;
     } catch (error) {
       console.error('Error adding permission:', error);
@@ -144,6 +145,7 @@ class PermissionService {
       document.permissions = document.permissions.filter((p) => p.username !== username);
       await document.save();
 
+      console.log(`Permission removed: ${username} from document ${documentId}`);
       return true;
     } catch (error) {
       console.error('Error removing permission:', error);

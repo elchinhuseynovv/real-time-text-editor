@@ -37,7 +37,7 @@ class DocumentService {
 
       return savedDoc;
     } catch (error) {
-      console.error('Error creating document:', error);
+      console.error('Error creating document:', error.message);
       throw error;
     }
   }
@@ -52,7 +52,7 @@ class DocumentService {
       const document = await Document.findById(documentId);
       return document;
     } catch (error) {
-      console.error('Error getting document:', error);
+      console.error('Error getting document:', error.message);
       throw error;
     }
   }
@@ -85,7 +85,7 @@ class DocumentService {
 
       return documents;
     } catch (error) {
-      console.error('Error getting documents:', error);
+      console.error('Error getting documents:', error.message);
       throw error;
     }
   }
@@ -124,7 +124,7 @@ class DocumentService {
 
       return document;
     } catch (error) {
-      console.error('Error updating document:', error);
+      console.error('Error updating document:', error.message);
       throw error;
     }
   }
@@ -149,7 +149,7 @@ class DocumentService {
 
       return document;
     } catch (error) {
-      console.error('Error updating document title:', error);
+      console.error('Error updating document title:', error.message);
       throw error;
     }
   }
@@ -168,7 +168,7 @@ class DocumentService {
 
       return !!result;
     } catch (error) {
-      console.error('Error deleting document:', error);
+      console.error('Error deleting document:', error.message);
       throw error;
     }
   }
@@ -184,7 +184,7 @@ class DocumentService {
         crdtService.setContent(documentId, document.content || '');
       }
     } catch (error) {
-      console.error('Error loading document into CRDT:', error);
+      console.error('Error loading document into CRDT:', error.message);
     }
   }
 
@@ -218,7 +218,7 @@ class DocumentService {
 
       return token;
     } catch (error) {
-      console.error('Error generating share link:', error);
+      console.error('Error generating share link:', error.message);
       throw error;
     }
   }
@@ -278,7 +278,7 @@ class DocumentService {
         access,
       };
     } catch (error) {
-      console.error('Error joining document by share token:', error);
+      console.error('Error joining document by share token:', error.message);
       throw error;
     }
   }
@@ -307,7 +307,7 @@ class DocumentService {
 
       return true;
     } catch (error) {
-      console.error('Error revoking share link:', error);
+      console.error('Error revoking share link:', error.message);
       throw error;
     }
   }
